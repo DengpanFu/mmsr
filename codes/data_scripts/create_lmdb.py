@@ -13,10 +13,9 @@ sys.path.append(osp.dirname(osp.dirname(osp.abspath(__file__))))
 import data.util as data_util  # noqa: E402
 import utils.util as util  # noqa: E402
 
-
 def main():
-    dataset = 'DIV2K_demo'  # vimeo90K | REDS | general (e.g., DIV2K, 291) | DIV2K_demo |test
-    mode = 'GT'  # used for vimeo90k and REDS datasets
+    dataset = 'REDS'  # vimeo90K | REDS | general (e.g., DIV2K, 291) | DIV2K_demo |test
+    mode = 'train_sharp'  # used for vimeo90k and REDS datasets
     # vimeo90k: GT | LR | flow
     # REDS: train_sharp, train_sharp_bicubic, train_blur_bicubic, train_blur, train_blur_comp
     #       train_sharp_flowx4
@@ -45,11 +44,9 @@ def main():
     elif dataset == 'test':
         test_lmdb('../../datasets/REDS/train_sharp_wval.lmdb', 'REDS')
 
-
 def read_image_worker(path, key):
     img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
     return (key, img)
-
 
 def general_image_folder(opt):
     """Create lmdb for general image folders
@@ -140,7 +137,6 @@ def general_image_folder(opt):
 
     pickle.dump(meta_info, open(osp.join(lmdb_save_path, 'meta_info.pkl'), "wb"))
     print('Finish creating lmdb meta info.')
-
 
 def vimeo90k(mode):
     """Create lmdb for the Vimeo90K dataset, each image with a fixed size
@@ -273,7 +269,6 @@ def vimeo90k(mode):
     meta_info['keys'] = list(key_set)
     pickle.dump(meta_info, open(osp.join(lmdb_save_path, 'meta_info.pkl'), "wb"))
     print('Finish creating lmdb meta info.')
-
 
 def REDS(mode):
     """Create lmdb for the REDS dataset, each image with a fixed size

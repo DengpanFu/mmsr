@@ -12,6 +12,8 @@ def create_model(opt):
     # video restoration
     elif model == 'video_base':
         from .Video_base_model import VideoBaseModel as M
+    elif model == 'meta_video':
+        from .Video_base_model import MetaVideoModel as M
     else:
         raise NotImplementedError('Model [{:s}] not recognized.'.format(model))
     m = M(opt)

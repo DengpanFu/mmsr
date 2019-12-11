@@ -9,7 +9,7 @@ from utils import util  # noqa: E402
 
 
 def main():
-    dataset = 'DIV2K800_sub'  # REDS | Vimeo90K | DIV2K800_sub
+    dataset = 'REDS'  # REDS | Vimeo90K | DIV2K800_sub
     opt = {}
     opt['dist'] = False
     opt['gpu_ids'] = [0]

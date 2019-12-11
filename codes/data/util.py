@@ -6,6 +6,7 @@ import numpy as np
 import glob
 import torch
 import cv2
+from PIL import Image
 
 ####################
 # Files & IO
@@ -87,6 +88,43 @@ def read_img(env, path, size=None):
         img = img[:, :, :3]
     return img
 
+def read_img_to_LR(env, path, size, scale=4):
+    if env is None:
+        img = Image.open(path)
+        Lsize = [int(img.size[0]/scale), int(img.size[1]/scale)]
+        LR_img = img.resize(Lsize, Image.BICUBIC)
+        LR_img = np.array(LR_img)[:,:,(2,1,0)]
+    else:
+        img = _read_img_lmdb(env, path, size)
+        Lsize = [int(img.size[1]/scale), int(img.size[0]/scale)]
+        LR_img = Image.fromarray(img).resize(Lsize, Image.BICUBIC)
+        LR_img = np.array(LR_img)
+    LR_img = LR_img.astype(np.float32) / 255.
+    return LR_img
+
+def get_img_patch(HR, LRs, psize=64, scale=1.):
+    Lh, Lw = LRs[0].shape[:2]
+    Hpsize = int(scale * psize)
+    Lpsize = int(psize)
+
+    if scale==int(scale):
+        step = 1
+    elif (scale*2)== int(scale*2):
+        step = 2
+    elif (scale*5) == int(scale*5):
+        step = 5
+    else:
+        step = 10
+
+    Lx = random.randrange(0, (Lw-Lpsize)//step)*step
+    Ly = random.randrange(0, (Lh-Lpsize)//step)*step
+
+    Hx, Hy = int(scale*Lx), int(scale*Ly)
+
+    retH = HR[Hy:Hy+Hpsize, Hx:Hx+Hpsize, :]
+    retL = [x[Ly:Ly+Lpsize, Lx:Lx+Lpsize, :] for x in LRs]
+
+    return retH, retL
 
 def read_img_seq(path):
     """Read a sequence of images from a given folder path

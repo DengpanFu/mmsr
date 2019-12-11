@@ -1,5 +1,6 @@
 ''' network architecture for EDVR '''
 import functools
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -267,46 +268,206 @@ class EDVR(nn.Module):
                 L1_fea = self.lrelu(self.conv_first_3(L1_fea))
                 H, W = H // 4, W // 4
             else:
-                L1_fea = self.lrelu(self.conv_first(x.view(-1, C, H, W)))
-        L1_fea = self.feature_extraction(L1_fea)
+                L1_fea = self.lrelu(self.conv_first(x.view(-1, C, H, W)))  # BN,64,64,64
+        L1_fea = self.feature_extraction(L1_fea)   # BN,64,64,64
         # L2
-        L2_fea = self.lrelu(self.fea_L2_conv1(L1_fea))
-        L2_fea = self.lrelu(self.fea_L2_conv2(L2_fea))
+        L2_fea = self.lrelu(self.fea_L2_conv1(L1_fea))  # BN,64,32,32
+        L2_fea = self.lrelu(self.fea_L2_conv2(L2_fea))  # BN,64,32,32
         # L3
-        L3_fea = self.lrelu(self.fea_L3_conv1(L2_fea))
-        L3_fea = self.lrelu(self.fea_L3_conv2(L3_fea))
+        L3_fea = self.lrelu(self.fea_L3_conv1(L2_fea))  # BN,64,16,16
+        L3_fea = self.lrelu(self.fea_L3_conv2(L3_fea))  # BN,64,16,16
 
-        L1_fea = L1_fea.view(B, N, -1, H, W)
-        L2_fea = L2_fea.view(B, N, -1, H // 2, W // 2)
-        L3_fea = L3_fea.view(B, N, -1, H // 4, W // 4)
+        L1_fea = L1_fea.view(B, N, -1, H, W)            # B,N,64,64,64
+        L2_fea = L2_fea.view(B, N, -1, H // 2, W // 2)  # B,N,64,32,32
+        L3_fea = L3_fea.view(B, N, -1, H // 4, W // 4)  # B,N,64,16,16
 
         #### pcd align
         # ref feature list
         ref_fea_l = [
             L1_fea[:, self.center, :, :, :].clone(), L2_fea[:, self.center, :, :, :].clone(),
             L3_fea[:, self.center, :, :, :].clone()
-        ]
+        ]   # [(B,64,64,64), (B,64,32,32), (B,64,16,16)]
         aligned_fea = []
         for i in range(N):
             nbr_fea_l = [
                 L1_fea[:, i, :, :, :].clone(), L2_fea[:, i, :, :, :].clone(),
                 L3_fea[:, i, :, :, :].clone()
             ]
-            aligned_fea.append(self.pcd_align(nbr_fea_l, ref_fea_l))
+            aligned_fea.append(self.pcd_align(nbr_fea_l, ref_fea_l))  # N,(B,64,64,64)
         aligned_fea = torch.stack(aligned_fea, dim=1)  # [B, N, C, H, W]
 
         if not self.w_TSA:
-            aligned_fea = aligned_fea.view(B, -1, H, W)
-        fea = self.tsa_fusion(aligned_fea)
+            aligned_fea = aligned_fea.view(B, -1, H, W)  # B,NC,64,64
+        fea = self.tsa_fusion(aligned_fea)   # B,C,64,64
 
-        out = self.recon_trunk(fea)
-        out = self.lrelu(self.pixel_shuffle(self.upconv1(out)))
-        out = self.lrelu(self.pixel_shuffle(self.upconv2(out)))
-        out = self.lrelu(self.HRconv(out))
-        out = self.conv_last(out)
+        out = self.recon_trunk(fea)   # B,C,64,64
+        out = self.lrelu(self.pixel_shuffle(self.upconv1(out)))  # B,C,128,128
+        out = self.lrelu(self.pixel_shuffle(self.upconv2(out)))  # B,C,256,256
+        out = self.lrelu(self.HRconv(out))    # B,C,256,256
+        out = self.conv_last(out)    # B,3,256,256
         if self.HR_in:
             base = x_center
         else:
-            base = F.interpolate(x_center, scale_factor=4, mode='bilinear', align_corners=False)
+            base = F.interpolate(x_center, scale_factor=4, mode='bilinear', 
+                        align_corners=False)    # B,3,256,256
         out += base
         return out
+
+
+# Meta 
+class Pos2Weight(nn.Module):
+    def __init__(self,inC, kernel_size=3, outC=3):
+        super(Pos2Weight,self).__init__()
+        self.inC = inC
+        self.kernel_size=kernel_size
+        self.outC = outC
+        self.meta_block=nn.Sequential(
+            nn.Linear(3,256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256,self.kernel_size*self.kernel_size*self.inC*self.outC)
+        )
+    def forward(self,x):
+
+        output = self.meta_block(x)
+        return output
+
+class MetaEDVR(nn.Module):
+    def __init__(self, nf=64, nframes=5, groups=8, front_RBs=5, back_RBs=10, center=None,
+                 predeblur=False, HR_in=False, w_TSA=True):
+        super(MetaEDVR, self).__init__()
+        self.nf = nf
+        self.center = nframes // 2 if center is None else center
+        self.is_predeblur = True if predeblur else False
+        self.HR_in = True if HR_in else False
+        self.w_TSA = w_TSA
+        ResidualBlock_noBN_f = functools.partial(arch_util.ResidualBlock_noBN, nf=nf)
+
+        #### extract features (for each frame)
+        if self.is_predeblur:
+            self.pre_deblur = Predeblur_ResNet_Pyramid(nf=nf, HR_in=self.HR_in)
+            self.conv_1x1 = nn.Conv2d(nf, nf, 1, 1, bias=True)
+        else:
+            if self.HR_in:
+                self.conv_first_1 = nn.Conv2d(3, nf, 3, 1, 1, bias=True)
+                self.conv_first_2 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
+                self.conv_first_3 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
+            else:
+                self.conv_first = nn.Conv2d(3, nf, 3, 1, 1, bias=True)
+        self.feature_extraction = arch_util.make_layer(ResidualBlock_noBN_f, front_RBs)
+        self.fea_L2_conv1 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
+        self.fea_L2_conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+        self.fea_L3_conv1 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
+        self.fea_L3_conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+
+        self.pcd_align = PCD_Align(nf=nf, groups=groups)
+        if self.w_TSA:
+            self.tsa_fusion = TSA_Fusion(nf=nf, nframes=nframes, center=self.center)
+        else:
+            self.tsa_fusion = nn.Conv2d(nframes * nf, nf, 1, 1, bias=True)
+
+        #### reconstruction
+        self.recon_trunk = arch_util.make_layer(ResidualBlock_noBN_f, back_RBs)
+        ## position to weight
+        self.P2W = Pos2Weight(inC=nf)
+
+        # #### upsampling
+        # self.upconv1 = nn.Conv2d(nf, nf * 4, 3, 1, 1, bias=True)
+        # self.upconv2 = nn.Conv2d(nf, 64 * 4, 3, 1, 1, bias=True)
+        # self.pixel_shuffle = nn.PixelShuffle(2)
+        # self.HRconv = nn.Conv2d(64, 64, 3, 1, 1, bias=True)
+        # self.conv_last = nn.Conv2d(64, 3, 3, 1, 1, bias=True)
+        #### activation function
+        self.lrelu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
+
+    def meta_upsample(self, x, pos_mat, scale):
+        scale_int = math.ceil(scale)
+        N,C,H,W = x.size()
+        up_x = x.view(N,C,H,1,W,1)
+        up_x = torch.cat([up_x]*scale_int,3)
+        up_x = torch.cat([up_x]*scale_int,5).permute(0,3,5,1,2,4)
+        up_x = up_x.contiguous().view(-1, C, H, W)
+
+        local_weight = self.P2W(pos_mat.view(pos_mat.size(1),-1))
+
+        cols = F.unfold(up_x, 3, padding=1)    # cols: N*r*r,64*9,H*W
+
+        cols = cols.contiguous().view(cols.size(0)//(scale_int**2), scale_int**2, cols.size(1), 
+            cols.size(2), 1).permute(0, 1, 3, 4, 2).contiguous()   # cols: N, r*r, H*W, 1, 64*9
+
+        local_weight = local_weight.contiguous().view(x.size(2), scale_int, x.size(3), scale_int, 
+            -1, 3).permute(1,3,0,2,4,5).contiguous()   # local_weight: r,r,H,W,64*9,3
+        local_weight = local_weight.contiguous().view(scale_int**2, x.size(2) * x.size(3), -1, 3) # r*r,H*W,64*9,3
+
+        out = torch.matmul(cols, local_weight).permute(0, 1, 4, 2, 3)  # N,r*r,H*W,1,3 => N,r*r,3,H*W,1
+        out = out.contiguous().view(x.size(0),scale_int,scale_int, 3, x.size(2), 
+                x.size(3)).permute(0, 3, 4, 1, 5, 2)   # N,r,r,3,50,50 => N,3,H,r,W,r
+        out = out.contiguous().view(x.size(0), 3, scale_int*x.size(2), scale_int*x.size(3)) # N,3,H*r,W*r
+        return out
+
+    def forward(self, x, scale, pos_mat, mask):
+        B, N, C, H, W = x.size()  # N video frames
+        x_center = x[:, self.center, :, :, :].contiguous()
+
+        #### extract LR features
+        # L1
+        if self.is_predeblur:
+            L1_fea = self.pre_deblur(x.view(-1, C, H, W))
+            L1_fea = self.conv_1x1(L1_fea)
+            if self.HR_in:
+                H, W = H // 4, W // 4
+        else:
+            if self.HR_in:
+                L1_fea = self.lrelu(self.conv_first_1(x.view(-1, C, H, W)))
+                L1_fea = self.lrelu(self.conv_first_2(L1_fea))
+                L1_fea = self.lrelu(self.conv_first_3(L1_fea))
+                H, W = H // 4, W // 4
+            else:
+                L1_fea = self.lrelu(self.conv_first(x.view(-1, C, H, W)))  # BN,64,64,64
+        L1_fea = self.feature_extraction(L1_fea)   # BN,64,64,64
+        # L2
+        L2_fea = self.lrelu(self.fea_L2_conv1(L1_fea))  # BN,64,32,32
+        L2_fea = self.lrelu(self.fea_L2_conv2(L2_fea))  # BN,64,32,32
+        # L3
+        L3_fea = self.lrelu(self.fea_L3_conv1(L2_fea))  # BN,64,16,16
+        L3_fea = self.lrelu(self.fea_L3_conv2(L3_fea))  # BN,64,16,16
+
+        L1_fea = L1_fea.view(B, N, -1, H, W)            # B,N,64,64,64
+        L2_fea = L2_fea.view(B, N, -1, H // 2, W // 2)  # B,N,64,32,32
+        L3_fea = L3_fea.view(B, N, -1, H // 4, W // 4)  # B,N,64,16,16
+
+        #### pcd align
+        # ref feature list
+        ref_fea_l = [
+            L1_fea[:, self.center, :, :, :].clone(), L2_fea[:, self.center, :, :, :].clone(),
+            L3_fea[:, self.center, :, :, :].clone()
+        ]   # [(B,64,64,64), (B,64,32,32), (B,64,16,16)]
+        aligned_fea = []
+        for i in range(N):
+            nbr_fea_l = [
+                L1_fea[:, i, :, :, :].clone(), L2_fea[:, i, :, :, :].clone(),
+                L3_fea[:, i, :, :, :].clone()
+            ]
+            aligned_fea.append(self.pcd_align(nbr_fea_l, ref_fea_l))  # N,(B,64,64,64)
+        aligned_fea = torch.stack(aligned_fea, dim=1)  # [B, N, C, H, W]
+
+        if not self.w_TSA:
+            aligned_fea = aligned_fea.view(B, -1, H, W)  # B,NC,64,64
+        fea = self.tsa_fusion(aligned_fea)   # B,C,64,64
+
+        out = self.recon_trunk(fea)   # B,C,64,64
+        out = self.meta_upsample(out, pos_mat, scale)
+        out = torch.masked_select(out, mask)
+        out = out.contiguous().view(B, C, int(H*scale), int(W*scale))
+        # out = self.lrelu(self.pixel_shuffle(self.upconv1(out)))  # B,C,128,128
+        # out = self.lrelu(self.pixel_shuffle(self.upconv2(out)))  # B,C,256,256
+        # out = self.lrelu(self.HRconv(out))    # B,C,256,256
+        # out = self.conv_last(out)    # B,3,256,256
+        
+        if self.HR_in:
+            base = x_center
+        else:
+            base = F.interpolate(x_center, scale_factor=scale, mode='bilinear', 
+                        align_corners=False)    # B,3,256,256
+        out += base
+        return out
+

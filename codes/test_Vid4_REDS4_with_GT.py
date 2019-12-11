@@ -21,7 +21,7 @@ def main():
     #################
     device = torch.device('cuda')
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-    data_mode = 'Vid4'  # Vid4 | sharp_bicubic | blur_bicubic | blur | blur_comp
+    data_mode = 'sharp_bicubic'  # Vid4 | sharp_bicubic | blur_bicubic | blur | blur_comp
     # Vid4: SR
     # REDS4: sharp_bicubic (SR-clean), blur_bicubic (SR-blur);
     #        blur (deblur-clean), blur_comp (deblur-compression).
@@ -36,7 +36,9 @@ def main():
             raise ValueError('Vid4 does not support stage 2.')
     elif data_mode == 'sharp_bicubic':
         if stage == 1:
-            model_path = '../experiments/pretrained_models/EDVR_REDS_SR_L.pth'
+            # model_path = '../experiments/pretrained_models/EDVR_REDS_SR_L.pth'
+            # model_path = '../experiments/001_EDVRwoTSA_scratch_lr4e-4_600k_REDS_LrCAR4S/models/600000_G.pth'
+            model_path = '../experiments/pretrained_models/EDVR_REDS_SR_M.pth'
         else:
             model_path = '../experiments/pretrained_models/EDVR_REDS_SR_Stage2.pth'
     elif data_mode == 'blur_bicubic':
@@ -62,8 +64,24 @@ def main():
     else:
         N_in = 5
 
+    save_imgs = False
+    model_mode = 'M'
+    exp_name = 'release_M'
+
     predeblur, HR_in = False, False
-    back_RBs = 40
+    if model_mode == 'L':
+        # for L model
+        nf = 128
+        back_RBs = 40
+        w_TSA = True
+    elif model_mode == 'M':
+        # for M model
+        nf = 64
+        back_RBs = 10
+        w_TSA = True
+    else:
+        raise ValueError('Unknown model mode')
+
     if data_mode == 'blur_bicubic':
         predeblur = True
     if data_mode == 'blur' or data_mode == 'blur_comp':
@@ -71,7 +89,9 @@ def main():
     if stage == 2:
         HR_in = True
         back_RBs = 20
-    model = EDVR_arch.EDVR(128, N_in, 8, 5, back_RBs, predeblur=predeblur, HR_in=HR_in)
+    model = EDVR_arch.EDVR(nf=nf, nframes=N_in, groups=8, front_RBs=5, 
+                           center=None, back_RBs=back_RBs, predeblur=predeblur, 
+                           HR_in=HR_in, w_TSA=w_TSA)
 
     #### dataset
     if data_mode == 'Vid4':
@@ -79,11 +99,12 @@ def main():
         GT_dataset_folder = '../datasets/Vid4/GT'
     else:
         if stage == 1:
-            test_dataset_folder = '../datasets/REDS4/{}'.format(data_mode)
+            test_dataset_folder = '../datasets/REDS/REDS4/{}'.format(data_mode)
+            # test_dataset_folder = '../datasets/REDS/REDS4/sharp_bicubic_pil'
         else:
             test_dataset_folder = '../results/REDS-EDVR_REDS_SR_L_flipx4'
             print('You should modify the test_dataset_folder path for stage 2')
-        GT_dataset_folder = '../datasets/REDS4/GT'
+        GT_dataset_folder = '../datasets/REDS/REDS4/GT'
 
     #### evaluation
     crop_border = 0
@@ -93,9 +114,11 @@ def main():
         padding = 'new_info'
     else:
         padding = 'replicate'
-    save_imgs = True
-
-    save_folder = '../results/{}'.format(data_mode)
+    
+    if exp_name is None:
+        save_folder = '../results/{}'.format(data_mode)
+    else:
+        save_folder = '../results/{}'.format(exp_name)
     util.mkdirs(save_folder)
     util.setup_logger('base', save_folder, 'test', level=logging.INFO, screen=True, tofile=True)
     logger = logging.getLogger('base')

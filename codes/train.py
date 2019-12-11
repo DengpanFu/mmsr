@@ -7,7 +7,7 @@ import logging
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-from data.data_sampler import DistIterSampler
+from data.data_sampler import DistIterSampler, DistMetaIterSampler
 
 import options.options as option
 from utils import util
@@ -18,7 +18,7 @@ from models import create_model
 def init_dist(backend='nccl', **kwargs):
     """initialization for distributed training"""
     if mp.get_start_method(allow_none=True) != 'spawn':
-        mp.set_start_method('spawn')
+        mp.set_start_method('spawn', force=True)
     rank = int(os.environ['RANK'])
     num_gpus = torch.cuda.device_count()
     torch.cuda.set_device(rank % num_gpus)
@@ -28,7 +28,8 @@ def init_dist(backend='nccl', **kwargs):
 def main():
     #### options
     parser = argparse.ArgumentParser()
-    parser.add_argument('-opt', type=str, help='Path to option YAML file.')
+    parser.add_argument('-opt', type=str, default='options/train/train_EDVR_woTSA_M.yml', 
+                        help='Path to option YAML file.')
     parser.add_argument('--launcher', choices=['none', 'pytorch'], default='none',
                         help='job launcher')
     parser.add_argument('--local_rank', type=int, default=0)
@@ -45,6 +46,8 @@ def main():
         init_dist()
         world_size = torch.distributed.get_world_size()
         rank = torch.distributed.get_rank()
+        print(world_size)
+        print(rank)
 
     #### loading resume state if exists
     if opt['path'].get('resume_state', None):
@@ -72,7 +75,7 @@ def main():
         # tensorboard logger
         if opt['use_tb_logger'] and 'debug' not in opt['name']:
             version = float(torch.__version__[0:3])
-            if version >= 1.1:  # PyTorch 1.1
+            if version >= 1.5:  # PyTorch 1.1
                 from torch.utils.tensorboard import SummaryWriter
             else:
                 logger.info(
@@ -98,7 +101,10 @@ def main():
     # torch.backends.cudnn.deterministic = True
 
     #### create train and val dataloader
-    dataset_ratio = 200  # enlarge the size of each epoch
+    if opt['datasets']['train']['ratio']:
+        dataset_ratio = opt['datasets']['train']['ratio']
+    else:
+        dataset_ratio = 200   # enlarge the size of each epoch
     for phase, dataset_opt in opt['datasets'].items():
         if phase == 'train':
             train_set = create_dataset(dataset_opt)
@@ -106,7 +112,9 @@ def main():
             total_iters = int(opt['train']['niter'])
             total_epochs = int(math.ceil(total_iters / train_size))
             if opt['dist']:
-                train_sampler = DistIterSampler(train_set, world_size, rank, dataset_ratio)
+                # train_sampler = DistIterSampler(train_set, world_size, rank, dataset_ratio)
+                train_sampler = DistMetaIterSampler(train_set, world_size, rank, 
+                    dataset_opt['batch_size'], len(opt['scale']), dataset_ratio)
                 total_epochs = int(math.ceil(total_iters / (train_size * dataset_ratio)))
             else:
                 train_sampler = None
