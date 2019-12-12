@@ -38,7 +38,8 @@ def main():
         if stage == 1:
             # model_path = '../experiments/pretrained_models/EDVR_REDS_SR_L.pth'
             # model_path = '../experiments/001_EDVRwoTSA_scratch_lr4e-4_600k_REDS_LrCAR4S/models/600000_G.pth'
-            model_path = '../experiments/pretrained_models/EDVR_REDS_SR_M.pth'
+            # model_path = '../experiments/pretrained_models/EDVR_REDS_SR_M.pth'
+            model_path = '../experiments/MetaEDVRwoTSA_M_scratch/90000_G.pth'
         else:
             model_path = '../experiments/pretrained_models/EDVR_REDS_SR_Stage2.pth'
     elif data_mode == 'blur_bicubic':
@@ -66,7 +67,8 @@ def main():
 
     save_imgs = False
     model_mode = 'M'
-    exp_name = 'release_M'
+    exp_name = 'Meta_M'
+    scale = 4
 
     predeblur, HR_in = False, False
     if model_mode == 'L':
@@ -78,7 +80,7 @@ def main():
         # for M model
         nf = 64
         back_RBs = 10
-        w_TSA = True
+        w_TSA = False
     else:
         raise ValueError('Unknown model mode')
 
@@ -89,9 +91,9 @@ def main():
     if stage == 2:
         HR_in = True
         back_RBs = 20
-    model = EDVR_arch.EDVR(nf=nf, nframes=N_in, groups=8, front_RBs=5, 
-                           center=None, back_RBs=back_RBs, predeblur=predeblur, 
-                           HR_in=HR_in, w_TSA=w_TSA)
+    model = EDVR_arch.MetaEDVR(nf=nf, nframes=N_in, groups=8, front_RBs=5, 
+                               center=None, back_RBs=back_RBs, predeblur=predeblur, 
+                               HR_in=HR_in, w_TSA=w_TSA)
 
     #### dataset
     if data_mode == 'Vid4':
@@ -168,7 +170,8 @@ def main():
             if flip_test:
                 output = util.flipx4_forward(model, imgs_in)
             else:
-                output = util.single_forward(model, imgs_in)
+                # output = util.single_forward(model, imgs_in)
+                output = util.meta_single_forward(model, imgs_in, scale)
             output = util.tensor2img(output.squeeze(0))
 
             if save_imgs:
@@ -229,3 +232,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
