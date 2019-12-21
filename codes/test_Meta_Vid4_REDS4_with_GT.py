@@ -38,7 +38,7 @@ def main():
         if stage == 1:
             # model_path = '../experiments/pretrained_models/EDVR_REDS_SR_L.pth'
             # model_path = '../experiments/001_EDVRwoTSA_scratch_lr4e-4_600k_REDS_LrCAR4S/models/600000_G.pth'
-            model_path = '../experiments/pretrained_models/EDVR_REDS_SR_M.pth'
+            # model_path = '../experiments/pretrained_models/EDVR_REDS_SR_M.pth'
             model_path = '../experiments/MetaEDVRwoTSA_M_scratch/models/90000_G.pth'
         else:
             model_path = '../experiments/pretrained_models/EDVR_REDS_SR_Stage2.pth'
@@ -67,7 +67,7 @@ def main():
 
     save_imgs = False
     model_mode = 'M'
-    exp_name = 'release_M'
+    exp_name = 'Meta_M'
     scale = 4
 
     predeblur, HR_in = False, False
@@ -232,3 +232,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

@@ -192,6 +192,7 @@ def single_forward(model, inp):
     output = output.data.float().cpu()
     return output
 
+
 def flipx4_forward(model, inp):
     """Flip testing with X4 self ensemble, i.e., normal, flip H, flip W, flip H and W
     Args:
@@ -215,6 +216,7 @@ def flipx4_forward(model, inp):
     output_f = output_f + torch.flip(output, (-2, -1))
 
     return output_f / 4
+
 
 def input_matrix_wpn(inH, inW, scale, add_scale=True):
     '''
@@ -294,6 +296,7 @@ def input_matrix_wpn(inH, inW, scale, add_scale=True):
 
     return pos_mat, mask_mat
 
+
 def meta_single_forward(model, LQs, scale):
     N, K, C, H, W = LQs.size()
     # oH, oW = int(H*scale), int(W*scale)
@@ -308,6 +311,7 @@ def meta_single_forward(model, LQs, scale):
             out = model_out
     out = out.data.float().cpu()
     return out
+
 
 ####################
 # metric
@@ -402,6 +406,8 @@ class ProgressBar(object):
     def update(self, msg='In progress...'):
         self.completed += 1
         elapsed = time.time() - self.start_time
+        if elapsed <= 0:
+            elapsed = 1.
         fps = self.completed / elapsed
         if self.task_num > 0:
             percentage = self.completed / float(self.task_num)

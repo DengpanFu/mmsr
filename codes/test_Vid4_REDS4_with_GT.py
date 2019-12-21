@@ -99,12 +99,12 @@ def main():
         GT_dataset_folder = '../datasets/Vid4/GT'
     else:
         if stage == 1:
-            test_dataset_folder = '../datasets/REDS/REDS4/{}'.format(data_mode)
+            test_dataset_folder = '../datasets/REDS4/{}'.format(data_mode)
             # test_dataset_folder = '../datasets/REDS/REDS4/sharp_bicubic_pil'
         else:
             test_dataset_folder = '../results/REDS-EDVR_REDS_SR_L_flipx4'
             print('You should modify the test_dataset_folder path for stage 2')
-        GT_dataset_folder = '../datasets/REDS/REDS4/GT'
+        GT_dataset_folder = '../datasets/REDS4/GT'
 
     #### evaluation
     crop_border = 0
