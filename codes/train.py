@@ -30,11 +30,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-opt', type=str, default='options/train/train_EDVR_woTSA_M.yml', 
                         help='Path to option YAML file.')
+    parser.add_argument('--set', dest='set_opt', default=None, nargs=argparse.REMAINDER, 
+                        help='set options')
     parser.add_argument('--launcher', choices=['none', 'pytorch'], default='none',
                         help='job launcher')
     parser.add_argument('--local_rank', type=int, default=0)
     args = parser.parse_args()
-    opt = option.parse(args.opt, is_train=True)
+    opt = option.parse(args.opt, args.set_opt, is_train=True)
 
     #### distributed training settings
     if args.launcher == 'none':  # disabled distributed training
@@ -46,8 +48,8 @@ def main():
         init_dist()
         world_size = torch.distributed.get_world_size()
         rank = torch.distributed.get_rank()
-        print(world_size)
-        print(rank)
+        # print(world_size)
+        # print(rank)
 
     #### loading resume state if exists
     if opt['path'].get('resume_state', None):
@@ -61,7 +63,7 @@ def main():
 
     #### mkdir and loggers
     if rank <= 0:  # normal training (rank -1) OR distributed training (rank 0)
-        if resume_state is None:
+        if resume_state is None and not opt['no_log']:
             util.mkdir_and_rename(
                 opt['path']['experiments_root'])  # rename experiment folder if exists
             util.mkdirs((path for key, path in opt['path'].items() if not key == 'experiments_root'
@@ -148,7 +150,6 @@ def main():
     else:
         current_step = 0
         start_epoch = 0
-
     #### training
     logger.info('Start training from epoch: {:d}, iter: {:d}'.format(start_epoch, current_step))
     for epoch in range(start_epoch, total_epochs + 1):
@@ -164,7 +165,6 @@ def main():
             #### training
             model.feed_data(train_data)
             model.optimize_parameters(current_step)
-
             #### log
             if current_step % opt['logger']['print_freq'] == 0:
                 logs = model.get_current_log()

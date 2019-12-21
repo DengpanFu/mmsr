@@ -25,11 +25,12 @@ class VideoBaseModel(BaseModel):
         # define network and load pretrained models
         self.netG = networks.define_G(opt).to(self.device)
         if opt['dist']:
-            self.netG = DistributedDataParallel(self.netG, device_ids=[torch.cuda.current_device()])
+            self.netG = DistributedDataParallel(self.netG, device_ids=[torch.cuda.current_device()], 
+                find_unused_parameters=True)
         else:
             self.netG = DataParallel(self.netG)
         # print network
-        self.print_network()
+        # self.print_network()
         self.load()
 
         if self.is_train:
@@ -86,7 +87,7 @@ class VideoBaseModel(BaseModel):
             self.optimizers.append(self.optimizer_G)
 
             #### schedulers
-            if train_opt['lr_scheme'] == 'MultiStepLR':
+            if train_opt['lr_scheme'] == 'MultiStepLR_Restart':
                 for optimizer in self.optimizers:
                     self.schedulers.append(
                         lr_scheduler.MultiStepLR_Restart(optimizer, train_opt['lr_steps'],
@@ -101,7 +102,8 @@ class VideoBaseModel(BaseModel):
                             optimizer, train_opt['T_period'], eta_min=train_opt['eta_min'],
                             restarts=train_opt['restarts'], weights=train_opt['restart_weights']))
             else:
-                raise NotImplementedError()
+                # raise NotImplementedError()
+                pass
 
             self.log_dict = OrderedDict()
 
@@ -169,6 +171,30 @@ class VideoBaseModel(BaseModel):
 class MetaVideoModel(VideoBaseModel):
     def __init__(self, opt):
         super(MetaVideoModel, self).__init__(opt)
+        train_opt = self.opt['train']
+        if train_opt['only_meta']:
+            wd_G = train_opt['weight_decay_G'] if train_opt['weight_decay_G'] else 0
+            optim_params = []
+            for k, v in self.netG.named_parameters():
+                if 'P2W' in k:
+                    optim_params.append(v)
+                else:
+                    v.requires_grad = False
+                    if self.rank <= 0:
+                        logger.warning('Params [{:s}] will not optimize.'.format(k))
+
+            self.optimizer_G = torch.optim.Adam(optim_params, lr=train_opt['lr_G'],
+                                            weight_decay=wd_G,
+                                            betas=(train_opt['beta1'], train_opt['beta2']))
+            self.optimizers = [self.optimizer_G]
+            if train_opt['lr_scheme'] == 'StepLR':
+                self.schedulers = [lr_scheduler.StepLR(self.optimizers[0], 
+                                step_size=train_opt['lr_step'], gamma=train_opt['lr_gamma'])]
+            elif train_opt['lr_scheme'] == 'MultiStepLR':
+                self.schedulers = [lr_scheduler.MultiStepLR(self.optimizers[0], 
+                                milestones=train_opt['lr_steps'], gamma=train_opt['lr_gamma'])]
+            else:
+                print('Using EDVR restart lr scheduler for only_meta mode')
 
     ######by given the scale and the size of input image
     ######we caculate the input matrix for the weight prediction network
@@ -274,3 +300,6 @@ class MetaVideoModel(VideoBaseModel):
 
         # set log
         self.log_dict['l_pix'] = l_pix.item()
+
+    def optimize_parameters_meta_only(self, step):
+        pass

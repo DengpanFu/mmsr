@@ -3,7 +3,7 @@ from collections import Counter
 from collections import defaultdict
 import torch
 from torch.optim.lr_scheduler import _LRScheduler
-
+from torch.optim.lr_scheduler import StepLR
 
 class MultiStepLR_Restart(_LRScheduler):
     def __init__(self, optimizer, milestones, restarts=None, weights=None, gamma=0.1,
@@ -39,7 +39,7 @@ class CosineAnnealingLR_Restart(_LRScheduler):
         self.eta_min = eta_min
         self.restarts = restarts if restarts else [0]
         self.restarts = [v + 1 for v in self.restarts]
-        self.restart_weights = weights if weights else [1]
+        self.restart_weights = weights if weights else [1] * len(restarts)
         self.last_restart = 0
         assert len(self.restarts) == len(
             self.restart_weights), 'restarts and their weights do not match.'

@@ -54,6 +54,8 @@ def get_image_paths(data_type, dataroot):
             paths = sorted(_get_paths_from_images(dataroot))
         else:
             raise NotImplementedError('data_type [{:s}] is not recognized.'.format(data_type))
+    if isinstance(sizes, str):
+        sizes = tuple([int(x) for x in sizes.split('_')])
     return paths, sizes
 
 
@@ -96,7 +98,7 @@ def read_img_to_LR(env, path, size, scale=4):
         LR_img = np.array(LR_img)[:,:,(2,1,0)]
     else:
         img = _read_img_lmdb(env, path, size)
-        Lsize = [int(img.size[1]/scale), int(img.size[0]/scale)]
+        Lsize = [int(img.shape[1]/scale), int(img.shape[0]/scale)]
         LR_img = Image.fromarray(img).resize(Lsize, Image.BICUBIC)
         LR_img = np.array(LR_img)
     LR_img = LR_img.astype(np.float32) / 255.

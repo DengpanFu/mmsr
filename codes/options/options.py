@@ -6,7 +6,7 @@ from utils.util import OrderedYaml
 Loader, Dumper = OrderedYaml()
 
 
-def parse(opt_path, is_train=True):
+def parse(opt_path, opt_list=None, is_train=True):
     with open(opt_path, mode='r') as f:
         opt = yaml.load(f, Loader=Loader)
     # export CUDA_VISIBLE_DEVICES
@@ -15,6 +15,7 @@ def parse(opt_path, is_train=True):
     print('export CUDA_VISIBLE_DEVICES=' + gpu_list)
 
     opt['is_train'] = is_train
+    if not 'no_log' in opt: opt['no_log'] = False
     if opt['scale'] == -1:
         opt['scale'] = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, \
                         2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, \
@@ -70,8 +71,27 @@ def parse(opt_path, is_train=True):
     if opt['distortion'] == 'sr':
         opt['network_G']['scale'] = scale
 
+    if opt_list is not None:
+        opt_from_list(opt, opt_list)
     return opt
 
+def opt_from_list(opt, opt_list):
+    from ast import literal_eval
+    assert(len(opt_list) % 2 == 0)
+    for k, v in zip(opt_list[0::2], opt_list[1::2]):
+        key_list = k.split('.')
+        d = opt
+        for subkey in key_list[:-1]:
+            if subkey in d:
+                d = d[subkey]
+            else:
+                d[subkey] = {}
+                d = d[subkey]
+        try:
+            value = literal_eval(v)
+        except:
+            value = v
+        d[key_list[-1]] = value
 
 def dict2str(opt, indent_l=1):
     '''dict to string for logger'''
