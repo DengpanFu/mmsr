@@ -119,4 +119,4 @@ venv.bak/
 
 # mypy
 .mypy_cache/
-codes/options/train_*
+codes/options/train/train_*
