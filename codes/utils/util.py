@@ -297,12 +297,15 @@ def input_matrix_wpn(inH, inW, scale, add_scale=True):
     return pos_mat, mask_mat
 
 
-def meta_single_forward(model, LQs, scale):
+def meta_single_forward(model, LQs, scale, n_gpus=1):
     N, K, C, H, W = LQs.size()
     # oH, oW = int(H*scale), int(W*scale)
     scale_coord_map, mask = input_matrix_wpn(H, W, scale)
     scale_coord_map = scale_coord_map.to(LQs.device)
     mask = mask.to(LQs.device)
+    if n_gpus > 1:
+        scale_coord_map = torch.cat([scale_coord_map] * n_gpus, 0)
+        mask = torch.cat([mask] * n_gpus, 0)
     with torch.no_grad():
         model_out = model(LQs, scale, scale_coord_map, mask)
         if isinstance(model_out, (list, tuple)):
