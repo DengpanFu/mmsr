@@ -29,6 +29,7 @@ class VideoBaseModel(BaseModel):
                 find_unused_parameters=True)
         else:
             self.netG = DataParallel(self.netG)
+        self.n_gpus = len(self.opt['gpu_ids'])
         # print network
         # self.print_network()
         self.load()
@@ -291,6 +292,9 @@ class MetaVideoModel(VideoBaseModel):
         _, _, outH, outW = self.real_H.size()
 
         scale_coord_map, mask = self.input_matrix_wpn(H, W, self.scale)
+        if self.n_gpus > 1 and not self.opt['dist']:
+            scale_coord_map = torch.cat([scale_coord_map] * self.n_gpus, 0)
+            mask = torch.cat([mask] * self.n_gpus, 0)
         self.optimizer_G.zero_grad()
         self.fake_H = self.netG(self.var_L, self.scale, scale_coord_map, mask)
 

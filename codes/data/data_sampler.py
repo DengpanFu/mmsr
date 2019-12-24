@@ -84,7 +84,6 @@ class DistMetaIterSampler(Sampler):
             distributed training.
         rank (optional): Rank of the current process within num_replicas.
     """
-
     def __init__(self, dataset, num_replicas=None, rank=None, batchsize=32, 
         num_scales=30, ratio=1):
         if num_replicas is None:
@@ -110,8 +109,6 @@ class DistMetaIterSampler(Sampler):
                 self.batchsize / self.num_scales) # 26600*300/32/30=8312
         self.total_size = num_samples * self.batchsize * self.num_scales  # 8312*32*30=7979520
         self.num_samples = self.total_size // self.num_replicas  # 7979520/2=3989760
-
-
 
     def __iter__(self):
         # deterministically shuffle based on epoch
@@ -144,3 +141,44 @@ class DistMetaIterSampler(Sampler):
 
     def set_epoch(self, epoch):
         self.epoch = epoch
+
+
+class MetaIterSampler(Sampler):
+    def __init__(self, dataset, batchsize=32, num_scales=30, ratio=1):
+        self.dataset = dataset
+        self.batchsize = batchsize
+        self.num_scales = num_scales
+        self.ratio = ratio
+        self.num_samples = int(math.ceil(len(dataset) * ratio / self.batchsize) * self.batchsize)
+        self.epoch = 0
+
+    def __iter__(self):
+        # deterministically shuffle based on epoch
+        g = torch.Generator()
+        g.manual_seed(self.epoch)
+        # generate image index
+        indices = torch.randperm(self.num_samples, generator=g).tolist()
+        dsize = len(self.dataset)   # 26600
+        indices = [v % dsize for v in indices]
+        
+        scales_templet = torch.arange(self.num_scales).repeat(self.batchsize, 1).t()  # 30,32
+        rand_start = torch.randperm(self.num_samples // self.batchsize, generator=g)  # 498720
+        scale_index = scales_templet[rand_start % self.num_scales]                    # 498720,16
+
+        scale_index = scale_index.reshape(-1).tolist()
+        assert len(scale_index) == self.num_samples
+        return iter(zip(indices, scale_index))
+
+    def __len__(self):
+        return self.num_samples
+
+    def set_epoch(self, epoch):
+        self.epoch = epoch
+
+if __name__ == "__main__":
+    N = 26600
+    bs = 32
+    ratio = 300
+    num_scales = 30
+    data = torch.rand(N)
+    samp = MetaIterSampler(data, bs, num_scales, ratio)
