@@ -175,6 +175,31 @@ class MetaIterSampler(Sampler):
     def set_epoch(self, epoch):
         self.epoch = epoch
 
+
+class IterSampler(Sampler):
+    def __init__(self, dataset, batchsize=32, ratio=1):
+        self.dataset = dataset
+        self.batchsize = batchsize
+        self.ratio = ratio
+        self.num_samples = int(math.ceil(len(dataset) * ratio / self.batchsize) * self.batchsize)
+        self.epoch = 0
+
+    def __iter__(self):
+        # deterministically shuffle based on epoch
+        g = torch.Generator()
+        g.manual_seed(self.epoch)
+        # generate image index
+        indices = torch.randperm(self.num_samples, generator=g).tolist()
+        dsize = len(self.dataset)   # 26600
+        indices = [v % dsize for v in indices]
+        return iter(indices)
+
+    def __len__(self):
+        return self.num_samples
+
+    def set_epoch(self, epoch):
+        self.epoch = epoch
+
 if __name__ == "__main__":
     N = 26600
     bs = 32

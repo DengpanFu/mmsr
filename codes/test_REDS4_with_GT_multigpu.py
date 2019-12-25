@@ -66,7 +66,7 @@ def main(opts):
                 all_imgs[sub]['gt'].append(gt_im)
 
     all_psnrs = []
-    for model_name in model_names[-2:]:
+    for model_name in model_names[1::2]:
         model_path = osp.join(model_dir, model_name)
         exp_name = model_name.split('_')[0]
         if 'meta' in opts.mode.lower():
@@ -81,8 +81,8 @@ def main(opts):
             raise TypeError('Unknown model mode: {}'.format(opts.mode))
         save_folder = osp.join(opts.save_dir, exp_name)
         util.mkdirs(save_folder)
-        util.setup_logger('base', save_folder, 'test', level=logging.INFO, screen=True, tofile=True)
-        logger = logging.getLogger('base')
+        util.setup_logger(exp_name, save_folder, 'test', level=logging.INFO, screen=True, tofile=True)
+        logger = logging.getLogger(exp_name)
 
         #### log info
         logger.info('Data: {}'.format(opts.test_dir))
