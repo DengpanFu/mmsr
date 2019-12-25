@@ -52,16 +52,44 @@ def main():
     #### loading resume state if exists
     if opt['path'].get('resume_state', None):
         # distributed resuming: all load into default GPU
+        print('Training from state: {}'.format(opt['path']['resume_state']))
         device_id = torch.cuda.current_device()
         resume_state = torch.load(opt['path']['resume_state'],
                                   map_location=lambda storage, loc: storage.cuda(device_id))
         option.check_resume(opt, resume_state['iter'])  # check resume options
+    elif opt['auto_resume']:
+        exp_dir = opt['path']['experiments_root']
+        # first time run: create dirs
+        if not os.path.exists(exp_dir):
+            os.makedirs(exp_dir)
+            os.makedirs(opt['path']['models'])
+            os.makedirs(opt['path']['training_state'])
+            os.makedirs(opt['path']['val_images'])
+            resume_state = None
+        else:
+            # detect experiment directory and get the latest state
+            state_dir = opt['path']['training_state']
+            state_files = [x for x in os.listdir(state_dir) if x.endswith('state')]
+            # no valid state detected
+            if len(state_files) < 1:
+                print('No previous training state found, train from start state')
+                resume_state = None
+            else:
+                state_files = sorted(state_files, key=lambda x: int(x.split('.')[0]))
+                latest_state = state_files[-1]
+                print('Training from lastest state: {}'.format(latest_state))
+                latest_state_file = os.path.join(state_dir, latest_state)
+                opt['path']['resume_state'] = latest_state_file
+                device_id = torch.cuda.current_device()
+                resume_state = torch.load(latest_state_file, 
+                        map_location=lambda storage, loc: storage.cuda(device_id))
+                option.check_resume(opt, resume_state['iter'])
     else:
         resume_state = None
 
     #### mkdir and loggers
     if rank <= 0:  # normal training (rank -1) OR distributed training (rank 0)
-        if resume_state is None and not opt['no_log']:
+        if resume_state is None and not opt['auto_resume'] and not opt['no_log']:
             util.mkdir_and_rename(
                 opt['path']['experiments_root'])  # rename experiment folder if exists
             util.mkdirs((path for key, path in opt['path'].items() if not key == 'experiments_root'
