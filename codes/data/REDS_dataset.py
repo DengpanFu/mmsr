@@ -16,7 +16,7 @@ try:
     import mc  # import memcached
 except ImportError:
     pass
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 logger = logging.getLogger('base')
 
