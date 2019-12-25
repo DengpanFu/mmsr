@@ -16,6 +16,7 @@ def parse(opt_path, opt_list=None, is_train=True):
 
     opt['is_train'] = is_train
     if not 'no_log' in opt: opt['no_log'] = False
+    if not 'auto_resume' in opt: opt['auto_resume'] = False
     if opt['scale'] == -1:
         opt['scale'] = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, \
                         2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, \

@@ -48,8 +48,6 @@ def main():
         init_dist()
         world_size = torch.distributed.get_world_size()
         rank = torch.distributed.get_rank()
-        # print(world_size)
-        # print(rank)
 
     #### loading resume state if exists
     if opt['path'].get('resume_state', None):
@@ -113,11 +111,12 @@ def main():
             train_size = int(math.ceil(len(train_set) / dataset_opt['batch_size']))
             total_iters = int(opt['train']['niter'])
             total_epochs = int(math.ceil(total_iters / train_size))
-            if opt['dist']:
-                # train_sampler = DistIterSampler(train_set, world_size, rank, dataset_ratio)
+            if dataset_opt['mode'] in ['MetaREDS', 'MetaREDSOnline']:
                 train_sampler = DistMetaIterSampler(train_set, world_size, rank, 
                     dataset_opt['batch_size'], len(opt['scale']), dataset_ratio)
                 total_epochs = int(math.ceil(total_iters / (train_size * dataset_ratio)))
+            elif dataset_opt['mode'] == 'REDS':
+                train_sampler = DistIterSampler(train_set, world_size, rank, dataset_ratio)
             else:
                 train_sampler = None
             train_loader = create_dataloader(train_set, dataset_opt, opt, train_sampler)

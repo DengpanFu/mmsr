@@ -30,6 +30,9 @@ def main():
         resume_state = torch.load(opt['path']['resume_state'],
                                   map_location=lambda storage, loc: storage.cuda(device_id))
         option.check_resume(opt, resume_state['iter'])  # check resume options
+    elif opt['auto_resume']:
+        # detect experiment directory and get the latest state
+        exp_dir = opt['path']['experiments_root']
     else:
         resume_state = None
 
@@ -79,7 +82,7 @@ def main():
             train_size = int(math.ceil(len(train_set) / dataset_opt['batch_size']))
             total_iters = int(opt['train']['niter'])
             total_epochs = int(math.ceil(total_iters / (train_size * dataset_ratio)))
-            if dataset_opt['mode'] == 'MetaREDS':
+            if dataset_opt['mode'] in ['MetaREDS', 'MetaREDSOnline']:
                 train_sampler = MetaIterSampler(train_set, 
                     dataset_opt['batch_size'], len(opt['scale']), dataset_ratio)
             elif dataset_opt['mode'] == 'REDS':
