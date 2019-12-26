@@ -208,6 +208,22 @@ class MetaVideoModel(VideoBaseModel):
         else:
             print('Using EDVR restart lr scheduler')
 
+        self.all_scales = self.opt['scale']
+        self.LQ_size = self.opt['datasets']['train']['LQ_size']
+        self.pre_compute_W = self.opt['network_G']['pre_compute_W']
+        self.Pos, self.Mask = None, None
+        if self.pre_compute_W:
+            self.Pos, self.Mask = {}, {}
+            assert(self.LQ_size is not None), "LQ_size is {} for pre-compute-W ".format(self.LQ_size)
+            if isinstance(self.all_scales, (list, tuple)):
+                for scale in self.all_scales:
+                    P, M = self.input_matrix_wpn(self.LQ_size, self.LQ_size, scale)
+                    self.Pos[scale] = P
+                    self.Mask[scale] = M
+            elif isinstance(self.all_scales, (int, float)):
+                P, M = self.input_matrix_wpn(self.LQ_size, self.LQ_size, self.all_scales)
+                self.Pos[scale] = P
+                self.Mask[scale] = M
 
     ######by given the scale and the size of input image
     ######we caculate the input matrix for the weight prediction network
@@ -303,7 +319,11 @@ class MetaVideoModel(VideoBaseModel):
         N, K, C, H, W = self.var_L.size()
         _, _, outH, outW = self.real_H.size()
 
-        scale_coord_map, mask = self.input_matrix_wpn(H, W, self.scale)
+        if self.pre_compute_W:
+            scale_coord_map = self.Pos[self.scale].clone()
+            mask = self.Mask[self.scale].clone()
+        else:
+            scale_coord_map, mask = self.input_matrix_wpn(H, W, self.scale)
         if self.n_gpus > 1 and not self.opt['dist']:
             scale_coord_map = torch.cat([scale_coord_map] * self.n_gpus, 0)
             mask = torch.cat([mask] * self.n_gpus, 0)

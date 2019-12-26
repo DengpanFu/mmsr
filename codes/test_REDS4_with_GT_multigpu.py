@@ -66,7 +66,7 @@ def main(opts):
                 all_imgs[sub]['gt'].append(gt_im)
 
     all_psnrs = []
-    for model_name in model_names[1::2]:
+    for model_name in model_names[-1:]:
         model_path = osp.join(model_dir, model_name)
         exp_name = model_name.split('_')[0]
         if 'meta' in opts.mode.lower():

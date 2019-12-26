@@ -390,14 +390,19 @@ class MetaEDVR(nn.Module):
         local_weight = self.P2W(pos_mat.view(pos_mat.size(1),-1))
 
         cols = F.unfold(up_x, 3, padding=1)    # cols: N*r*r,64*9,H*W
-
-        cols = cols.contiguous().view(cols.size(0)//(scale_int**2), scale_int**2, cols.size(1), 
+        if not self.training: torch.cuda.empty_cache()
+        
+        cols = cols.view(cols.size(0)//(scale_int**2), scale_int**2, cols.size(1), 
             cols.size(2), 1).permute(0, 1, 3, 4, 2).contiguous()   # cols: N, r*r, H*W, 1, 64*9
+        if not self.training: torch.cuda.empty_cache()
 
-        local_weight = local_weight.contiguous().view(x.size(2), scale_int, x.size(3), scale_int, 
+        local_weight = local_weight.view(x.size(2), scale_int, x.size(3), scale_int, 
             -1, 3).permute(1,3,0,2,4,5).contiguous()   # local_weight: r,r,H,W,64*9,3
-        local_weight = local_weight.contiguous().view(scale_int**2, x.size(2) * x.size(3), -1, 3) # r*r,H*W,64*9,3
-
+        if not self.training: torch.cuda.empty_cache()
+        
+        local_weight = local_weight.view(scale_int**2, x.size(2) * x.size(3), -1, 3).contiguous() # r*r,H*W,64*9,3
+        if not self.training: torch.cuda.empty_cache()
+        
         out = torch.matmul(cols, local_weight).permute(0, 1, 4, 2, 3)  # N,r*r,H*W,1,3 => N,r*r,3,H*W,1
         out = out.contiguous().view(x.size(0),scale_int,scale_int, 3, x.size(2), 
                 x.size(3)).permute(0, 3, 4, 1, 5, 2)   # N,r,r,3,50,50 => N,3,H,r,W,r

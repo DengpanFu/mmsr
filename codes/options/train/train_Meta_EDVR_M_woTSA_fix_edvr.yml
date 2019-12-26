@@ -53,7 +53,7 @@ path:
 
 #### training settings: learning rate scheme, loss
 train:
-  # only_meta: True
+  edvr_lr_mult: 0
   lr_G: !!float 1e-4
   lr_scheme: StepLR
   lr_step: 150000
