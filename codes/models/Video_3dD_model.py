@@ -69,11 +69,11 @@ class Videl3dDModel(BaseModel):
         if mode == 'pix':
             loss_type = opt['pixel_criterion']
             if loss_type == 'l1':
-                criterion = nn.L1Loss(reduction='sum').to(self.device)
+                criterion = nn.L1Loss(reduction=opt['reduction']).to(self.device)
             elif loss_type == 'l2':
-                criterion = nn.MSELoss(reduction='sum').to(self.device)
+                criterion = nn.MSELoss(reduction=opt['reduction']).to(self.device)
             elif loss_type == 'cb':
-                criterion = CharbonnierLoss().to(self.device)
+                criterion = CharbonnierLoss(reduction=opt['reduction']).to(self.device)
             else:
                 raise NotImplementedError('Loss type [{:s}] is not recognized for pixel'.
                     format(loss_type))

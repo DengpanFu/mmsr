@@ -18,8 +18,8 @@ datasets:
     interval_list: [1]
     random_reverse: false
     border_mode: false
-    dataroot_GT: ../datasets/REDS/train_sharp
-    dataroot_LQ: ../datasets/REDS/train_sharp_bicubic
+    dataroot_GT: /home/dengpanfu/SR/mmsr/datasets/REDS/train_sharp
+    dataroot_LQ: /home/dengpanfu/SR/mmsr/datasets/REDS/train_sharp_bicubic
     cache_keys: ~
     ratio: 200
 

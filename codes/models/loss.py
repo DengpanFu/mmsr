@@ -17,7 +17,7 @@ class CharbonnierLoss(nn.Module):
         elif self.reduction == 'mean':
             loss = torch.mean(torch.sqrt(diff * diff + self.eps))
         else:
-            pass
+            raise TypeError('Unknown reduction type')
         return loss
 
 

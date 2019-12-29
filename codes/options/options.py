@@ -17,6 +17,7 @@ def parse(opt_path, opt_list=None, is_train=True):
     opt['is_train'] = is_train
     set_default_opt(opt, 'no_log', False)
     set_default_opt(opt, 'auto_resume', True)
+    set_default_opt(opt['train', 'reduction', 'sum'])
 
     if opt['scale'] == -1:
         opt['scale'] = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, \

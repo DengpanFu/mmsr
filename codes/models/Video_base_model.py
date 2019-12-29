@@ -40,11 +40,11 @@ class VideoBaseModel(BaseModel):
             #### loss
             loss_type = train_opt['pixel_criterion']
             if loss_type == 'l1':
-                self.cri_pix = nn.L1Loss(reduction='sum').to(self.device)
+                self.cri_pix = nn.L1Loss(reduction=train_opt['reduction']).to(self.device)
             elif loss_type == 'l2':
-                self.cri_pix = nn.MSELoss(reduction='sum').to(self.device)
+                self.cri_pix = nn.MSELoss(reduction=train_opt['reduction']).to(self.device)
             elif loss_type == 'cb':
-                self.cri_pix = CharbonnierLoss().to(self.device)
+                self.cri_pix = CharbonnierLoss(reduction=train_opt['reduction']).to(self.device)
             else:
                 raise NotImplementedError('Loss type [{:s}] is not recognized.'.format(loss_type))
             self.l_pix_w = train_opt['pixel_weight']
