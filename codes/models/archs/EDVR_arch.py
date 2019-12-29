@@ -458,13 +458,14 @@ class Pos2Weight(nn.Module):
 
 class MetaEDVR(nn.Module):
     def __init__(self, nf=64, nframes=5, groups=8, front_RBs=5, back_RBs=10, center=None,
-                 predeblur=False, HR_in=False, w_TSA=True):
+                 predeblur=False, HR_in=False, w_TSA=True, has_final_conv=False):
         super(MetaEDVR, self).__init__()
         self.nf = nf
         self.center = nframes // 2 if center is None else center
         self.is_predeblur = True if predeblur else False
         self.HR_in = True if HR_in else False
         self.w_TSA = w_TSA
+        self.has_final_conv = has_final_conv
         ResidualBlock_noBN_f = functools.partial(arch_util.ResidualBlock_noBN, nf=nf)
 
         #### extract features (for each frame)
@@ -500,7 +501,8 @@ class MetaEDVR(nn.Module):
         # self.upconv2 = nn.Conv2d(nf, 64 * 4, 3, 1, 1, bias=True)
         # self.pixel_shuffle = nn.PixelShuffle(2)
         # self.HRconv = nn.Conv2d(64, 64, 3, 1, 1, bias=True)
-        # self.conv_last = nn.Conv2d(64, 3, 3, 1, 1, bias=True)
+        if self.has_final_conv:
+            self.conv_final = nn.Conv2d(3, 3, 3, 1, 1, bias=True)
         #### activation function
         self.lrelu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
 
@@ -577,7 +579,6 @@ class MetaEDVR(nn.Module):
                 L1_fea[:, i, :, :, :].clone(), L2_fea[:, i, :, :, :].clone(),
                 L3_fea[:, i, :, :, :].clone()
             ]
-            import pdb; pdb.set_trace()  # breakpoint fd4242f0 //
             aligned_fea.append(self.pcd_align(nbr_fea_l, ref_fea_l))  # N,(B,64,64,64)
         aligned_fea = torch.stack(aligned_fea, dim=1)  # [B, N, C, H, W]
 
@@ -592,7 +593,8 @@ class MetaEDVR(nn.Module):
         # out = self.lrelu(self.pixel_shuffle(self.upconv1(out)))  # B,C,128,128
         # out = self.lrelu(self.pixel_shuffle(self.upconv2(out)))  # B,C,256,256
         # out = self.lrelu(self.HRconv(out))    # B,C,256,256
-        # out = self.conv_last(out)    # B,3,256,256
+        if self.has_final_conv:
+            out = self.conv_final(out)    # B,3,256,256
         
         if self.HR_in:
             base = x_center
