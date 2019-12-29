@@ -590,8 +590,6 @@ class MetaEDVR(nn.Module):
         out = self.meta_upsample(out, pos_mat, scale)
         out = torch.masked_select(out, mask)
         out = out.contiguous().view(B, C, int(H*scale), int(W*scale))
-        # out = self.lrelu(self.pixel_shuffle(self.upconv1(out)))  # B,C,128,128
-        # out = self.lrelu(self.pixel_shuffle(self.upconv2(out)))  # B,C,256,256
         # out = self.lrelu(self.HRconv(out))    # B,C,256,256
         if self.has_final_conv:
             out = self.conv_final(out)    # B,3,256,256
