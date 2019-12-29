@@ -102,6 +102,14 @@ class VideoBaseModel(BaseModel):
                         lr_scheduler.CosineAnnealingLR_Restart(
                             optimizer, train_opt['T_period'], eta_min=train_opt['eta_min'],
                             restarts=train_opt['restarts'], weights=train_opt['restart_weights']))
+            elif lr_scheme == 'StepLR':
+                for optimizer in self.optimizers:
+                    self.schedulers.append(lr_scheduler.StepLR(optimizer, 
+                            step_size=train_opt['lr_step'], gamma=train_opt['lr_gamma']))
+            elif lr_scheme == 'MultiStepLR':
+                for optimizer in self.optimizers:
+                    self.schedulers.append(lr_scheduler.MultiStepLR(optimizer, 
+                            milestones=train_opt['lr_steps'], gamma=train_opt['lr_gamma']))
             else:
                 # raise NotImplementedError()
                 pass
