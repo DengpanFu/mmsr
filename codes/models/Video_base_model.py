@@ -225,9 +225,6 @@ class MetaVideoModel(VideoBaseModel):
                 self.Pos[scale] = P
                 self.Mask[scale] = M
 
-    ######by given the scale and the size of input image
-    ######we caculate the input matrix for the weight prediction network
-    ###### input matrix for weight prediction network
     def input_matrix_wpn(self,inH, inW, scale, add_scale=True):
         '''
         inH, inW: the size of the feature maps

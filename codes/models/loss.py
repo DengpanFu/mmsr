@@ -5,13 +5,19 @@ import torch.nn as nn
 class CharbonnierLoss(nn.Module):
     """Charbonnier Loss (L1)"""
 
-    def __init__(self, eps=1e-6):
+    def __init__(self, eps=1e-6, reduction='sum'):
         super(CharbonnierLoss, self).__init__()
         self.eps = eps
+        self.reduction = reduction
 
     def forward(self, x, y):
         diff = x - y
-        loss = torch.sum(torch.sqrt(diff * diff + self.eps))
+        if self.reduction == 'sum':
+            loss = torch.sum(torch.sqrt(diff * diff + self.eps))
+        elif self.reduction == 'mean':
+            loss = torch.mean(torch.sqrt(diff * diff + self.eps))
+        else:
+            pass
         return loss
 
 
@@ -45,9 +51,21 @@ class GANLoss(nn.Module):
         else:
             return torch.empty_like(input).fill_(self.fake_label_val)
 
-    def forward(self, input, target_is_real):
-        target_label = self.get_target_label(input, target_is_real)
-        loss = self.loss(input, target_label)
+    def forward(self, inputs, target_is_real):
+        if isinstance(inputs, (tuple, list)):
+            if len(inputs) == 1:
+                target_label = self.get_target_label(inputs[0], target_is_real)
+                loss = self.loss(inputs[0], target_label)
+            else:
+                loss = []
+                for inp in inputs:
+                    target_label = self.get_target_label(inp, target_is_real)
+                    los = self.loss(inp, target_label)
+                    loss.append(los)
+                loss = torch.sum(loss)
+        else:
+            target_label = self.get_target_label(inputs, target_is_real)
+            loss = self.loss(inputs, target_label)
         return loss
 
 

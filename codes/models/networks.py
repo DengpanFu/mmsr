@@ -24,6 +24,13 @@ def define_G(opt):
                               back_RBs=opt_net['back_RBs'], center=opt_net['center'],
                               predeblur=opt_net['predeblur'], HR_in=opt_net['HR_in'],
                               w_TSA=opt_net['w_TSA'])
+    # video SR for multiple target frames
+    elif which_model == 'MultiEDVR':
+        netG = EDVR_arch.MultiEDVR(nf=opt_net['nf'], nframes=opt_net['nframes'],
+                                   groups=opt_net['groups'], front_RBs=opt_net['front_RBs'],
+                                   back_RBs=opt_net['back_RBs'], center=opt_net['center'],
+                                   predeblur=opt_net['predeblur'], HR_in=opt_net['HR_in'],
+                                   w_TSA=opt_net['w_TSA'])
     # arbitrary magnification video super-resolution
     elif which_model == 'MetaEDVR':
         netG = EDVR_arch.MetaEDVR(nf=opt_net['nf'], nframes=opt_net['nframes'],
@@ -44,6 +51,17 @@ def define_D(opt):
 
     if which_model == 'discriminator_vgg_128':
         netD = SRGAN_arch.Discriminator_VGG_128(in_nc=opt_net['in_nc'], nf=opt_net['nf'])
+    elif which_model == 'DCN3D':
+        netD = SRGAN_arch.MultiscaleDiscriminator(input_nc=opt_net['input_nc'], 
+                                                  ndf=opt_net['ndf'], 
+                                                  n_layers=opt_net['n_layers'], 
+                                                  num_D=opt_net['num_d'], 
+                                                  use_sigmoid=opt_net['use_sigmoid'], 
+                                                  get_inter_feat=opt_net['get_inter_feat'], 
+                                                  has_bias=opt_net['has_bias'], 
+                                                  has_sn=opt_net['has_sn'], 
+                                                  max_ndf=opt_net['max_ndf'], 
+                                                  conv_type=opt_net['conv_type'])
     else:
         raise NotImplementedError('Discriminator model [{:s}] not recognized'.format(which_model))
     return netD

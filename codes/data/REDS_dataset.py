@@ -16,7 +16,7 @@ try:
     import mc  # import memcached
 except ImportError:
     pass
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 
 logger = logging.getLogger('base')
 
@@ -105,7 +105,7 @@ class REDSDataset(data.Dataset):
         assert len(
             neighbor_list) == self.opt['N_frames'], 'Wrong length of neighbor list: {}'.format(
                 len(neighbor_list))
-        return neighbor_list
+        return neighbor_list, name_b
 
     def read_imgs(self, root_dir, name_a, name_b, is_gt=False):
         if not isinstance(name_b, (tuple, list)):
@@ -143,7 +143,7 @@ class REDSDataset(data.Dataset):
         name_a, name_b = key.split('_')
         center_frame_idx = int(name_b)
 
-        neighbor_list = self.get_neighbor_list(center_frame_idx)
+        neighbor_list, name_b = self.get_neighbor_list(center_frame_idx)
         
         img_GT = self.read_imgs(self.GT_root, name_a, name_b, True)[0]
         img_LQs = self.read_imgs(self.LQ_root, name_a, neighbor_list)
@@ -176,6 +176,59 @@ class REDSDataset(data.Dataset):
 
     def __len__(self):
         return len(self.paths_GT)
+
+class MultiREDSDataset(REDSDataset):
+    def __init__(self, opt):
+        super(MultiREDSDataset, self).__init__(opt=opt)
+        self.valid_nf = opt['valid_nf']
+        self.nf = opt['N_frames']
+
+    def __getitem__(self, index):
+        if self.data_type == 'lmdb' and self.GT_env is None:
+            self._init_lmdb()
+
+        LQ_size = self.opt['LQ_size']
+        key = self.paths_GT[index]
+        name_a, name_b = key.split('_')
+        center_frame_idx = int(name_b)
+
+        neighbor_list, name_b = self.get_neighbor_list(center_frame_idx)
+        key = name_a + '_' + name_b
+        
+        extra = self.valid_nf // 2
+        name_bs = neighbor_list[extra:self.nf-extra]
+
+        img_GTs = self.read_imgs(self.GT_root, name_a, name_bs, True)
+        img_LQs = self.read_imgs(self.LQ_root, name_a, neighbor_list)
+
+        if self.opt['phase'] == 'train':
+            H, W, _ = img_LQs[0].shape
+            rnd_h = random.randint(0, max(0, H - LQ_size))
+            rnd_w = random.randint(0, max(0, W - LQ_size))
+            img_LQs = [v[rnd_h:rnd_h + LQ_size, rnd_w:rnd_w + LQ_size, :] for v in img_LQs]
+            rnd_h_HR, rnd_w_HR = int(rnd_h * self.scale), int(rnd_w * self.scale)
+            GT_size = int(LQ_size * self.scale)
+            img_GTs = [v[rnd_h_HR:rnd_h_HR + GT_size, rnd_w_HR:rnd_w_HR + GT_size, :] for v in img_GTs]
+            # augmentation - flip, rotate
+            num_gt = len(img_GTs)
+            img_LQs += img_GTs
+            img_LQs = util.augment(img_LQs, self.opt['use_flip'], self.opt['use_rot'])
+            img_GTs = img_LQs[-num_gt:]
+            img_LQs = img_LQs[:-num_gt]
+
+        # stack LQ images to NHWC, N is the frame number
+        img_LQs = np.stack(img_LQs, axis=0)
+        img_GTs = np.stack(img_GTs, axis=0)
+        # BGR => RGB
+        img_GTs = img_GTs[:, :, :, [2, 1, 0]]
+        img_LQs = img_LQs[:, :, :, [2, 1, 0]]
+        # NHWC => NCHW
+        img_GTs = torch.from_numpy(np.ascontiguousarray(
+                            np.transpose(img_GTs, (0, 3, 1, 2)))).float()
+        img_LQs = torch.from_numpy(np.ascontiguousarray(
+                            np.transpose(img_LQs, (0, 3, 1, 2)))).float()
+        return {'LQs': img_LQs, 'GT': img_GTs, 'key': key, 'scale': self.scale}
+
 
 class MetaREDSDatasetOnline(data.Dataset):
     '''
@@ -257,7 +310,7 @@ class MetaREDSDatasetOnline(data.Dataset):
         assert len(
             neighbor_list) == self.opt['N_frames'], 'Wrong length of neighbor list: {}'.format(
                 len(neighbor_list))
-        return neighbor_list
+        return neighbor_list, name_b
 
     def read_imgs(self, root_dir, name_a, name_b, scale=None):
         if scale is None:
@@ -302,7 +355,7 @@ class MetaREDSDatasetOnline(data.Dataset):
         name_a, name_b = key.split('_')
         center_frame_idx = int(name_b)
 
-        neighbor_list = self.get_neighbor_list(center_frame_idx)
+        neighbor_list, name_b = self.get_neighbor_list(center_frame_idx)
 
         #### get the images
         img_GT = self.read_imgs(self.GT_root, name_a, name_b)[0]
@@ -405,7 +458,7 @@ class MetaREDSDataset(data.Dataset):
         assert len(
             neighbor_list) == self.opt['N_frames'], 'Wrong length of neighbor list: {}'.format(
                 len(neighbor_list))
-        return neighbor_list
+        return neighbor_list, name_b
 
     def read_imgs(self, root_dir, name_a, name_b, scale=None):
         if scale is None:
@@ -432,7 +485,7 @@ class MetaREDSDataset(data.Dataset):
         name_a, name_b = key.split('_')
         center_frame_idx = int(name_b)
 
-        neighbor_list = self.get_neighbor_list(center_frame_idx)
+        neighbor_list, name_b = self.get_neighbor_list(center_frame_idx)
 
         #### get the images
         img_GT = self.read_imgs(self.GT_root, name_a, name_b)[0]

@@ -37,6 +37,8 @@ def create_dataset(dataset_opt):
     # datasets for video restoration
     elif mode == 'REDS':
         from data.REDS_dataset import REDSDataset as D
+    elif mode == 'MultiREDS':
+        from data.REDS_dataset import MultiREDSDataset as D
     elif mode == 'MetaREDS':
         from data.REDS_dataset import MetaREDSDataset as D
     elif mode == 'MetaREDSOnline':

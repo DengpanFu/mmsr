@@ -110,7 +110,7 @@ def main():
             if dataset_opt['mode'] in ['MetaREDS', 'MetaREDSOnline']:
                 train_sampler = MetaIterSampler(train_set, 
                     dataset_opt['batch_size'], len(opt['scale']), dataset_ratio)
-            elif dataset_opt['mode'] == 'REDS':
+            elif dataset_opt['mode'] in ['REDS', 'MultiREDS']:
                 train_sampler = IterSampler(train_set, dataset_opt['batch_size'], dataset_ratio)
             else:
                 train_sampler = None
@@ -169,7 +169,8 @@ def main():
                     # tensorboard logger
                     if opt['use_tb_logger'] and 'debug' not in opt['name']:
                         tb_logger.add_scalar(k, v, current_step)
-                    logger.info(message)
+                logger.info(message)
+                print("PROGRESS: {:02d}%".format(int(current_step/total_iters*100)))
             #### validation
             if opt['datasets'].get('val', None) and current_step % opt['train']['val_freq'] == 0:
                 pbar = util.ProgressBar(len(val_loader))

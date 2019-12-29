@@ -15,8 +15,9 @@ def parse(opt_path, opt_list=None, is_train=True):
     print('export CUDA_VISIBLE_DEVICES=' + gpu_list)
 
     opt['is_train'] = is_train
-    if not 'no_log' in opt: opt['no_log'] = False
-    if not 'auto_resume' in opt: opt['auto_resume'] = False
+    set_default_opt(opt, 'no_log', False)
+    set_default_opt(opt, 'auto_resume', True)
+
     if opt['scale'] == -1:
         opt['scale'] = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, \
                         2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, \
@@ -52,30 +53,94 @@ def parse(opt_path, opt_list=None, is_train=True):
     if not 'root' in opt['path']:
         opt['path']['root'] = osp.abspath(osp.join(__file__, osp.pardir, osp.pardir, osp.pardir))
     if is_train:
-        experiments_root = osp.join(opt['path']['root'], 'experiments', opt['name'])
-        opt['path']['experiments_root'] = experiments_root
-        opt['path']['models'] = osp.join(experiments_root, 'models')
-        opt['path']['training_state'] = osp.join(experiments_root, 'training_state')
-        opt['path']['log'] = experiments_root
-        opt['path']['val_images'] = osp.join(experiments_root, 'val_images')
+        if not 'experiments_root' in opt['path']:
+            experiments_root = osp.join(opt['path']['root'], 'experiments', opt['name'])
+            set_default_opt(opt['path'], 'experiments_root', experiments_root)
+        else:
+            experiments_root = opt['path']['experiments_root']
+        set_default_opt(opt['path'], 'models', osp.join(experiments_root, 'models'))
+        set_default_opt(opt['path'], 'training_state', osp.join(experiments_root, 'training_state'))
+        set_default_opt(opt['path'], 'log', experiments_root)
+        set_default_opt(opt['path'], 'val_images', osp.join(experiments_root, 'val_images'))
 
         # change some options for debug mode
         if 'debug' in opt['name']:
-            opt['train']['val_freq'] = 8
-            opt['logger']['print_freq'] = 1
-            opt['logger']['save_checkpoint_freq'] = 8
+            set_default_opt(opt['train'], 'val_freq', 8)
+            set_default_opt(opt['logger'], 'print_freq', 1)
+            set_default_opt(opt['logger'], 'save_checkpoint_freq', 8)
     else:  # test
-        results_root = osp.join(opt['path']['root'], 'results', opt['name'])
-        opt['path']['results_root'] = results_root
-        opt['path']['log'] = results_root
+        if not 'results_root' in opt['path']:
+            results_root = osp.join(opt['path']['root'], 'results', opt['name'])
+            set_default_opt(opt['path'], 'results_root', results_root)
+        else:
+            results_root = opt['path']['results_root']
+        set_default_opt(opt['path'], 'log', results_root)
 
     # network
     if opt['distortion'] == 'sr':
         opt['network_G']['scale'] = scale
+    # set some default network config for network G
+    set_default_opt(opt['network_G'], 'which_model_G', 'MultiEDVR')
+    set_default_opt(opt['network_G'], 'nf', 64)
+    set_default_opt(opt['network_G'], 'nframes', 5)
+    set_default_opt(opt['network_G'], 'groups', 8)
+    set_default_opt(opt['network_G'], 'front_RBs', 5)
+    set_default_opt(opt['network_G'], 'back_RBs', 10)
+    set_default_opt(opt['network_G'], 'predeblur', False)
+    set_default_opt(opt['network_G'], 'HR_in', False)
+    set_default_opt(opt['network_G'], 'w_TSA', False)
+    # set some default network config for network D
+    if 'network_D' in opt:
+        set_default_opt(opt['network_D'], 'which_model_D', 'DCN3D')
+        set_default_opt(opt['network_D'], 'input_nc', 3)
+        set_default_opt(opt['network_D'], 'ndf', 64)
+        set_default_opt(opt['network_D'], 'n_layers', 3)
+        set_default_opt(opt['network_D'], 'num_d', 1)
+        set_default_opt(opt['network_D'], 'use_sigmoid', False)
+        set_default_opt(opt['network_D'], 'get_inter_feat', False)
+        set_default_opt(opt['network_D'], 'has_bias', False)
+        set_default_opt(opt['network_D'], 'has_sn', False)
+        set_default_opt(opt['network_D'], 'max_ndf', 256)
+        set_default_opt(opt['network_D'], 'conv_type', 'deform')
+
+        # if has network_D, different optimizer/lr_scheduler options need
+        set_default_opt(opt['train'], 'lr_G', 1e-4)
+        set_default_opt(opt['train'], 'lr_D', 4e-4)
+        set_default_opt(opt['train'], 'beta1_G', 0.9)
+        set_default_opt(opt['train'], 'beta2_G', 0.99)
+        set_default_opt(opt['train'], 'beta1_D', 0.9)
+        set_default_opt(opt['train'], 'beta2_D', 0.99)
+        set_default_opt(opt['train'], 'lr_scheme_G', 'StepLR')
+        set_default_opt(opt['train'], 'lr_scheme_D', 'StepLR')
+        set_default_opt(opt['train'], 'lr_step_G', 50000)
+        set_default_opt(opt['train'], 'lr_step_D', 50000)
+        set_default_opt(opt['train'], 'lr_gamma_G', 0.5)
+        set_default_opt(opt['train'], 'lr_gamma_D', 0.5)
+        set_default_opt(opt['train'], 'niter', 200000)
+        set_default_opt(opt['train'], 'warmup_iter', -1)
+        set_default_opt(opt['train'], 'restart_weights_G', [1, 1, 1])
+        set_default_opt(opt['train'], 'restart_weights_D', [1, 1, 1])
+        set_default_opt(opt['train'], 'eta_min_G', 1e-7)
+        set_default_opt(opt['train'], 'eta_min_D', 1e-7)
+
+        # lr_scheme_G: CosineAnnealingLR_Restart
+        # T_period_G: [150000, 150000, 150000, 150000]
+        # restarts_G: [150000, 300000, 450000]
+
+        set_default_opt(opt['train'], 'pixel_criterion', 'cb')
+        set_default_opt(opt['train'], 'pixel_weight', 1.0)
+        set_default_opt(opt['train'], 'gan_type', 'lsgan')
+        set_default_opt(opt['train'], 'gan_weight', 1.0)
+        set_default_opt(opt['train'], 'val_freq', 5e3)
 
     if opt_list is not None:
         opt_from_list(opt, opt_list)
     return opt
+
+
+def set_default_opt(opt, key, value):
+    if not key in opt:
+        opt[key] = value
 
 def opt_from_list(opt, opt_list):
     from ast import literal_eval
@@ -137,7 +202,7 @@ def check_resume(opt, resume_iter):
         opt['path']['pretrain_model_G'] = osp.join(opt['path']['models'],
                                                    '{}_G.pth'.format(resume_iter))
         logger.info('Set [pretrain_model_G] to ' + opt['path']['pretrain_model_G'])
-        if 'gan' in opt['model']:
+        if 'gan' in opt['model'] or '3d_D' in opt['model']:
             opt['path']['pretrain_model_D'] = osp.join(opt['path']['models'],
                                                        '{}_D.pth'.format(resume_iter))
             logger.info('Set [pretrain_model_D] to ' + opt['path']['pretrain_model_D'])
