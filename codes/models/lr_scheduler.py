@@ -3,7 +3,7 @@ from collections import Counter
 from collections import defaultdict
 import torch
 from torch.optim.lr_scheduler import _LRScheduler
-from torch.optim.lr_scheduler import StepLR
+from torch.optim.lr_scheduler import StepLR, MultiStepLR, CosineAnnealingLR
 
 class MultiStepLR_Restart(_LRScheduler):
     def __init__(self, optimizer, milestones, restarts=None, weights=None, gamma=0.1,

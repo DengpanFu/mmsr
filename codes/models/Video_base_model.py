@@ -23,98 +23,115 @@ class VideoBaseModel(BaseModel):
         train_opt = opt['train']
 
         # define network and load pretrained models
-        self.netG = networks.define_G(opt).to(self.device)
-        if opt['dist']:
-            self.netG = DistributedDataParallel(self.netG, device_ids=[torch.cuda.current_device()], 
-                find_unused_parameters=True)
-        else:
-            self.netG = DataParallel(self.netG)
+        self.netG = self.get_network(opt, 'G')
         self.n_gpus = len(self.opt['gpu_ids'])
-        # print network
-        # self.print_network()
-        self.load()
 
         if self.is_train:
             self.netG.train()
 
-            #### loss
-            loss_type = train_opt['pixel_criterion']
-            if loss_type == 'l1':
-                self.cri_pix = nn.L1Loss(reduction=train_opt['reduction']).to(self.device)
-            elif loss_type == 'l2':
-                self.cri_pix = nn.MSELoss(reduction=train_opt['reduction']).to(self.device)
-            elif loss_type == 'cb':
-                self.cri_pix = CharbonnierLoss(reduction=train_opt['reduction']).to(self.device)
-            else:
-                raise NotImplementedError('Loss type [{:s}] is not recognized.'.format(loss_type))
-            self.l_pix_w = train_opt['pixel_weight']
-
-            #### optimizers
-            wd_G = train_opt['weight_decay_G'] if train_opt['weight_decay_G'] else 0
-            if train_opt['ft_tsa_only']:
-                normal_params = []
-                tsa_fusion_params = []
-                for k, v in self.netG.named_parameters():
-                    if v.requires_grad:
-                        if 'tsa_fusion' in k:
-                            tsa_fusion_params.append(v)
-                        else:
-                            normal_params.append(v)
-                    else:
-                        if self.rank <= 0:
-                            logger.warning('Params [{:s}] will not optimize.'.format(k))
-                optim_params = [
-                    {  # add normal params first
-                        'params': normal_params,
-                        'lr': train_opt['lr_G']
-                    },
-                    {
-                        'params': tsa_fusion_params,
-                        'lr': train_opt['lr_G']
-                    },
-                ]
-            else:
-                optim_params = []
-                for k, v in self.netG.named_parameters():
-                    if v.requires_grad:
-                        optim_params.append(v)
-                    else:
-                        if self.rank <= 0:
-                            logger.warning('Params [{:s}] will not optimize.'.format(k))
-
-            self.optimizer_G = torch.optim.Adam(optim_params, lr=train_opt['lr_G'],
-                                                weight_decay=wd_G,
-                                                betas=(train_opt['beta1'], train_opt['beta2']))
+            ######## loss ########
+            self.cri_pix, self.l_pix_w = self.get_criterion(mode='pix', opt=train_opt)
+            ######## optimizers ########
+            self.optimizer_G = self.get_optimizer(self.netG, opt=train_opt)
             self.optimizers.append(self.optimizer_G)
-
-            #### schedulers
-            if train_opt['lr_scheme'] == 'MultiStepLR_Restart':
-                for optimizer in self.optimizers:
-                    self.schedulers.append(
-                        lr_scheduler.MultiStepLR_Restart(optimizer, train_opt['lr_steps'],
-                                                         restarts=train_opt['restarts'],
-                                                         weights=train_opt['restart_weights'],
-                                                         gamma=train_opt['lr_gamma'],
-                                                         clear_state=train_opt['clear_state']))
-            elif train_opt['lr_scheme'] == 'CosineAnnealingLR_Restart':
-                for optimizer in self.optimizers:
-                    self.schedulers.append(
-                        lr_scheduler.CosineAnnealingLR_Restart(
-                            optimizer, train_opt['T_period'], eta_min=train_opt['eta_min'],
-                            restarts=train_opt['restarts'], weights=train_opt['restart_weights']))
-            elif train_opt['lr_scheme'] == 'StepLR':
-                for optimizer in self.optimizers:
-                    self.schedulers.append(lr_scheduler.StepLR(optimizer, 
-                            step_size=train_opt['lr_step'], gamma=train_opt['lr_gamma']))
-            elif train_opt['lr_scheme'] == 'MultiStepLR':
-                for optimizer in self.optimizers:
-                    self.schedulers.append(lr_scheduler.MultiStepLR(optimizer, 
-                            milestones=train_opt['lr_steps'], gamma=train_opt['lr_gamma']))
-            else:
-                # raise NotImplementedError()
-                pass
+            ######## schedulers ########
+            self.scheduler_G = self.get_lr_scheduler(self.optimizer_G, train_opt)
+            self.schedulers = [self.scheduler_G]
 
             self.log_dict = OrderedDict()
+        #### print network
+        # self.print_network()
+        self.load()
+
+    def get_network(self, opt, mode='G'):
+        assert(mode in ['G', 'D'])
+        if mode == 'G':
+            net = networks.define_G(opt).to(self.device)
+        else:
+            net = networks.define_D(opt).to(self.device)
+        if opt['dist']:
+            net = DistributedDataParallel(net, 
+                        device_ids=[torch.cuda.current_device()], 
+                        find_unused_parameters=True, 
+                        broadcast_buffers=False)
+        else:
+            net = DataParallel(net)
+        return net
+
+    def get_criterion(self, mode, opt):
+        if mode == 'pix':
+            loss_type = opt['pixel_criterion']
+            if loss_type == 'l1':
+                criterion = nn.L1Loss(reduction=opt['reduction']).to(self.device)
+            elif loss_type == 'l2':
+                criterion = nn.MSELoss(reduction=opt['reduction']).to(self.device)
+            elif loss_type == 'cb':
+                criterion = CharbonnierLoss(reduction=opt['reduction']).to(self.device)
+            else:
+                raise NotImplementedError('Loss type [{:s}] is not recognized for pixel'.
+                    format(loss_type))
+            weight = opt['pixel_weight']
+        elif mode == 'gan':
+            criterion = GANLoss(opt['gan_type'], 1.0, 0.0).to(self.device)
+            weight = opt['gan_weight']
+        else:
+            raise TypeError('Unknown type: {} for criterion'.format(mode))
+        return criterion, weight
+
+    def get_optimizer(self, net, opt):
+        wd = opt['weight_decay_G'] if opt['weight_decay_G'] else 0
+        beta1 = opt['beta1'] if opt['beta1'] else 0.9
+        beta2 = opt['beta2'] if opt['beta2'] else 0.99
+        if opt['ft_tsa_only']:
+            normal_params, tsa_fusion_params = [], []
+            for k, v in net.named_parameters():
+                if v.requires_grad:
+                    if 'tsa_fusion' in k:
+                        tsa_fusion_params.append(v)
+                    else:
+                        normal_params.append(v)
+                else:
+                    if self.rank <= 0:
+                        logger.warning('Params [{:s}] will not optimize.'.format(k))
+            optim_params = [{'params': normal_params, 'lr': opt['lr_G'], 'name': 'normal'}, 
+                            {'params': tsa_fusion_params, 'lr': opt['lr_G'], 'name': 'tsa'}]
+        else:
+            optim_params = []
+            for k, v in net.named_parameters():
+                if v.requires_grad:
+                    optim_params.append(v)
+                else:
+                    if self.rank <= 0:
+                        logger.warning('Params [{:s}] will not optimize.'.format(k))
+
+        optimizer = torch.optim.Adam(optim_params, lr=opt['lr_G'], weight_decay=wd,
+                                     betas=(beta1, beta2))
+        return optimizer
+
+    def get_lr_scheduler(self, optimizer, opt, mode=None):
+        assert mode in ['G', 'D', None]
+        fpm = lambda x: x + '_' + mode if mode else x
+        lr_scheme = opt['lr_scheme']
+        if lr_scheme == 'MultiStepLR_Restart':
+            scheduler = lr_scheduler.MultiStepLR_Restart(optimizer, opt[fpm('lr_steps')],
+                        restarts=opt[fpm('restarts')], weights=opt[fpm('restart_weights')],
+                        gamma=opt[fpm('lr_gamma')], clear_state=opt[fpm('clear_state')])
+        elif lr_scheme == 'CosineAnnealingLR_Restart':
+            scheduler = lr_scheduler.CosineAnnealingLR_Restart(optimizer, opt[fpm('T_period')], 
+                        eta_min=opt[fpm('eta_min')], restarts=opt[fpm('restarts')], 
+                        weights=opt[fpm('restart_weights')])
+        elif lr_scheme == 'StepLR':
+            scheduler = lr_scheduler.StepLR(optimizer, 
+                        step_size=opt[fpm('lr_step')], gamma=opt[fpm('lr_gamma')])
+        elif lr_scheme == 'MultiStepLR':
+            scheduler = lr_scheduler.MultiStepLR(optimizer, 
+                        milestones=opt[fpm('lr_steps')], gamma=opt[fpm('lr_gamma')])
+        elif lr_scheme == 'CosineAnnealingLR':
+            scheduler = lr_scheduler.CosineAnnealingLR(optimizer, 
+                        T_max=opt[fpm('T_max')], eta_min=opt[fpm('eta_min')])
+        else:
+            raise TypeError('Unknown lr scheduler type: {}'.format(lr_scheme))
+        return scheduler
 
     def feed_data(self, data, need_GT=True):
         self.var_L = data['LQs'].to(self.device)
@@ -181,40 +198,8 @@ class MetaVideoModel(VideoBaseModel):
     def __init__(self, opt):
         super(MetaVideoModel, self).__init__(opt)
         train_opt = self.opt['train']
-        wd_G = train_opt['weight_decay_G'] if train_opt['weight_decay_G'] else 0
-        if train_opt['edvr_lr_mult'] <= 0:
-            optim_params = []
-            for k, v in self.netG.named_parameters():
-                if 'P2W' in k:
-                    optim_params.append(v)
-                else:
-                    v.requires_grad = False
-                    if self.rank <= 0:
-                        logger.warning('Params [{:s}] will not optimize.'.format(k))
-        else:
-            edvr_params, meta_params = [], []
-            for k, v in self.netG.named_parameters():
-                if 'P2W' in k:
-                    meta_params.append(v)
-                else:
-                    meta_params.append(v)
-            optim_params = [{'params': edvr_params, 
-                             'lr': train_opt['lr_G'] * train_opt['edvr_lr_mult']},
-                            {'params': meta_params, 
-                            'lr': train_opt['lr_G']}]
-
-        self.optimizer_G = torch.optim.Adam(optim_params, lr=train_opt['lr_G'],
-                                            weight_decay=wd_G,
-                                            betas=(train_opt['beta1'], train_opt['beta2']))
+        self.optimizer_G = self.get_optimizer(self.netG, train_opt)
         self.optimizers = [self.optimizer_G]
-        if train_opt['lr_scheme'] == 'StepLR':
-            self.schedulers = [lr_scheduler.StepLR(self.optimizers[0], 
-                            step_size=train_opt['lr_step'], gamma=train_opt['lr_gamma'])]
-        elif train_opt['lr_scheme'] == 'MultiStepLR':
-            self.schedulers = [lr_scheduler.MultiStepLR(self.optimizers[0], 
-                            milestones=train_opt['lr_steps'], gamma=train_opt['lr_gamma'])]
-        else:
-            print('Using EDVR restart lr scheduler')
 
         self.all_scales = self.opt['scale']
         self.LQ_size = self.opt['datasets']['train']['LQ_size']
@@ -232,6 +217,36 @@ class MetaVideoModel(VideoBaseModel):
                 P, M = self.input_matrix_wpn(self.LQ_size, self.LQ_size, self.all_scales)
                 self.Pos[scale] = P
                 self.Mask[scale] = M
+
+    def get_optimizer(self, net, opt):
+        wd = opt['weight_decay_G'] if opt['weight_decay_G'] else 0
+        beta1 = opt['beta1'] if opt['beta1'] else 0.9
+        beta2 = opt['beta2'] if opt['beta2'] else 0.99
+
+        if opt['edvr_lr_mult'] <= 0:
+            optim_params = []
+            for k, v in net.named_parameters():
+                if v.requires_grad:
+                    if 'P2W' in k:
+                        optim_params.append(v)
+                else:
+                    if self.rank <= 0:
+                        logger.warning('Params [{:s}] will not optimize.'.format(k))
+        else:
+            edvr_params, meta_params = [], []
+            for k, v in net.named_parameters():
+                if 'P2W' in k:
+                    meta_params.append(v)
+                else:
+                    edvr_params.append(v)
+            optim_params = [{'params': edvr_params, 'name': 'edvr', 
+                             'lr': opt['lr_G'] * opt['edvr_lr_mult']}, 
+                            {'params': meta_params, 'name': 'meta', 
+                            'lr': opt['lr_G']}]
+
+        optimizer = torch.optim.Adam(optim_params, lr=opt['lr_G'],
+                                    weight_decay=wd, betas=(beta1, beta2))
+        return optimizer
 
     def input_matrix_wpn(self,inH, inW, scale, add_scale=True):
         '''
@@ -342,5 +357,3 @@ class MetaVideoModel(VideoBaseModel):
         # set log
         self.log_dict['l_pix'] = l_pix.item()
 
-    def optimize_parameters_meta_only(self, step):
-        pass

@@ -61,10 +61,11 @@ def main():
         exp_dir = opt['path']['experiments_root']
         # first time run: create dirs
         if not os.path.exists(exp_dir):
-            os.makedirs(exp_dir)
-            os.makedirs(opt['path']['models'])
-            os.makedirs(opt['path']['training_state'])
-            os.makedirs(opt['path']['val_images'])
+            if rank <= 0:
+                os.makedirs(exp_dir)
+                os.makedirs(opt['path']['models'])
+                os.makedirs(opt['path']['training_state'])
+                os.makedirs(opt['path']['val_images'])
             resume_state = None
         else:
             # detect experiment directory and get the latest state
@@ -143,7 +144,7 @@ def main():
                 train_sampler = DistMetaIterSampler(train_set, world_size, rank, 
                     dataset_opt['batch_size'], len(opt['scale']), dataset_ratio)
                 total_epochs = int(math.ceil(total_iters / (train_size * dataset_ratio)))
-            elif dataset_opt['mode'] == 'REDS':
+            elif dataset_opt['mode'] in ['REDS', 'MultiREDS']:
                 train_sampler = DistIterSampler(train_set, world_size, rank, dataset_ratio)
             else:
                 train_sampler = None

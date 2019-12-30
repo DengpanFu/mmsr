@@ -37,7 +37,7 @@ def define_G(opt):
                                   groups=opt_net['groups'], front_RBs=opt_net['front_RBs'],
                                   back_RBs=opt_net['back_RBs'], center=opt_net['center'],
                                   predeblur=opt_net['predeblur'], HR_in=opt_net['HR_in'],
-                                  w_TSA=opt_net['w_TSA'])
+                                  w_TSA=opt_net['w_TSA'], fix_edvr=opt_net['fix_edvr'])
     else:
         raise NotImplementedError('Generator model [{:s}] not recognized'.format(which_model))
 

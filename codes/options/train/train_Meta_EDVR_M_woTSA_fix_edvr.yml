@@ -5,8 +5,9 @@ use_tb_logger: true
 model: meta_video
 distortion: sr
 scale: -1
-gpu_ids: [1]
+gpu_ids: [7]
 # gpu_ids: [0,1,2,3,4,5,6,7]
+auto_resume: true
 # no_log: true
 
 #### datasets
@@ -17,16 +18,16 @@ datasets:
     interval_list: [1]
     random_reverse: false
     border_mode: false
-    dataroot_GT: ../datasets/REDS/train_sharp_wval.lmdb
-    dataroot_LQ: ../datasets/REDS/LR_x1_x6.lmdb
+    dataroot_GT: ../datasets/REDS/train_sharp
+    dataroot_LQ: ../datasets/REDS/LR_bicubic
     # dataroot_LQ: ../datasets/REDS/train_sharp_bicubic_wval.lmdb
     cache_keys: ~
     ratio: 300
 
     N_frames: 5
     use_shuffle: true
-    n_workers: 0 # per GPU
-    batch_size: 2
+    n_workers: 3 # per GPU
+    batch_size: 4
     GT_size: 256
     LQ_size: 64
     use_flip: true
@@ -44,10 +45,11 @@ network_G:
   predeblur: false
   HR_in: false
   w_TSA: false
+  fix_edvr: true
 
 #### path
 path:
-  # pretrain_model_G: ../experiments/pretrained_models/EDVR_REDS_SR_M_woTSA.pth
+  pretrain_model_G: ../experiments/pretrained_models/EDVR_REDS_SR_M_woTSA.pth
   strict_load: false
   resume_state: ~
 

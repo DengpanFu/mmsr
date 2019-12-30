@@ -458,7 +458,11 @@ class Pos2Weight(nn.Module):
 
 class MetaEDVR(nn.Module):
     def __init__(self, nf=64, nframes=5, groups=8, front_RBs=5, back_RBs=10, center=None,
-                 predeblur=False, HR_in=False, w_TSA=True, has_final_conv=False):
+                 predeblur=False, HR_in=False, w_TSA=True, has_final_conv=False, 
+                 fix_edvr=False):
+        """
+        EDVR based arbitrary scale SR.
+        """
         super(MetaEDVR, self).__init__()
         self.nf = nf
         self.center = nframes // 2 if center is None else center
@@ -466,6 +470,7 @@ class MetaEDVR(nn.Module):
         self.HR_in = True if HR_in else False
         self.w_TSA = w_TSA
         self.has_final_conv = has_final_conv
+        self.fix_edvr = fix_edvr
         ResidualBlock_noBN_f = functools.partial(arch_util.ResidualBlock_noBN, nf=nf)
 
         #### extract features (for each frame)
@@ -505,6 +510,14 @@ class MetaEDVR(nn.Module):
             self.conv_final = nn.Conv2d(3, 3, 3, 1, 1, bias=True)
         #### activation function
         self.lrelu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
+
+    def train(self, mode=True):
+        nn.Module.train(self, mode)
+        if mode:
+            if self.fix_edvr:
+                for k, v in self.named_parameters():
+                    if not ('P2W' in k or 'conv_final' in k):
+                        v.requires_grad = False
 
     def meta_upsample(self, x, pos_mat, scale):
         scale_int = math.ceil(scale)

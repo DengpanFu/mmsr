@@ -23,20 +23,10 @@ class Videl3dDModel(BaseModel):
         train_opt = opt['train']
 
         # define network and load pretrained models
-        self.netG = networks.define_G(opt).to(self.device)
-        if opt['dist']:
-            self.netG = DistributedDataParallel(self.netG, 
-                device_ids=[torch.cuda.current_device()], find_unused_parameters=True)
-        else:
-            self.netG = DataParallel(self.netG)
+        self.netG = self.get_network(opt, 'G')
 
         if self.is_train:
-            self.netD = networks.define_D(opt).to(self.device)
-            if opt['dist']:
-                self.netG = DistributedDataParallel(self.netD, 
-                    device_ids=[torch.cuda.current_device()], find_unused_parameters=True)
-            else:
-                self.netD = DataParallel(self.netD)
+            self.netD = self.get_network(opt, 'D')
 
             self.netG.train()
             self.netD.train()
@@ -52,10 +42,8 @@ class Videl3dDModel(BaseModel):
             self.optimizers = [self.optimizer_G, self.optimizer_D]
 
             ######## schedulers ########
-            self.scheduler_G = self.get_lr_scheduler(self.optimizer_G, train_opt['lr_scheme_G'], 
-                                    train_opt, mode='G')
-            self.scheduler_D = self.get_lr_scheduler(self.optimizer_D, train_opt['lr_scheme_D'], 
-                                    train_opt, mode='D')
+            self.scheduler_G = self.get_lr_scheduler(self.optimizer_G, train_opt, mode='G')
+            self.scheduler_D = self.get_lr_scheduler(self.optimizer_D, train_opt, mode='D')
             self.schedulers = [self.scheduler_G, self.scheduler_D]
 
             self.log_dict = OrderedDict()
@@ -64,6 +52,21 @@ class Videl3dDModel(BaseModel):
         # print network
         # self.print_network()
         self.load()
+
+    def get_network(self, opt, mode='G'):
+        assert(mode in ['G', 'D'])
+        if mode == G:
+            net = networks.define_G(opt).to(self.device)
+        else:
+            net = networks.define_D(opt).to(self.device)
+        if opt['dist']:
+            net = DistributedDataParallel(net, 
+                        device_ids=[torch.cuda.current_device()], 
+                        find_unused_parameters=True, 
+                        broadcast_buffers=False)
+        else:
+            net = DataParallel(net)
+        return net
 
     def get_criterion(self, mode, opt):
         if mode == 'pix':
@@ -100,22 +103,27 @@ class Videl3dDModel(BaseModel):
                                      betas=(beta1, beta2))
         return optimizer
 
-    def get_lr_scheduler(self, optimizer, lr_scheme, opt, mode='G'):
-        assert mode in ['G', 'D']
+    def get_lr_scheduler(self, optimizer, opt, mode='G'):
+        assert mode in ['G', 'D', None]
+        fpm = lambda x: x + '_' + mode if mode else x
+        lr_scheme = opt[fpm('lr_scheme')]
         if lr_scheme == 'MultiStepLR_Restart':
-            scheduler = lr_scheduler.MultiStepLR_Restart(optimizer, opt['lr_steps_'+mode],
-                        restarts=opt['restarts_'+mode], weights=opt['restart_weights_'+mode],
-                        gamma=opt['lr_gamma_'+mode], clear_state=opt['clear_state_'+mode])
+            scheduler = lr_scheduler.MultiStepLR_Restart(optimizer, opt[fpm('lr_steps')],
+                        restarts=opt[fpm('restarts')], weights=opt[fpm('restart_weights')],
+                        gamma=opt[fpm('lr_gamma')], clear_state=opt[fpm('clear_state')])
         elif lr_scheme == 'CosineAnnealingLR_Restart':
-            scheduler = lr_scheduler.CosineAnnealingLR_Restart(optimizer, opt['T_period_'+mode], 
-                        eta_min=opt['eta_min_'+mode], restarts=opt['restarts_'+mode], 
-                        weights=opt['restart_weights_'+mode])
+            scheduler = lr_scheduler.CosineAnnealingLR_Restart(optimizer, opt[fpm('T_period')], 
+                        eta_min=opt[fpm('eta_min')], restarts=opt[fpm('restarts')], 
+                        weights=opt[fpm('restart_weights')])
         elif lr_scheme == 'StepLR':
             scheduler = lr_scheduler.StepLR(optimizer, 
-                        step_size=opt['lr_step_'+mode], gamma=opt['lr_gamma_'+mode])
+                        step_size=opt[fpm('lr_step')], gamma=opt[fpm('lr_gamma')])
         elif lr_scheme == 'MultiStepLR':
             scheduler = lr_scheduler.MultiStepLR(optimizer, 
-                        milestones=opt['lr_steps_'+mode], gamma=opt['lr_gamma_'+mode])
+                        milestones=opt[fpm('lr_steps')], gamma=opt[fpm('lr_gamma')])
+        elif lr_scheme == 'CosineAnnealingLR':
+            scheduler = lr_scheduler.CosineAnnealingLR(optimizer, 
+                        T_max=opt[fpm('T_max')], eta_min=opt[fpm('eta_min')])
         else:
             raise TypeError('Unknown lr scheduler type: {}'.format(lr_scheme))
         return scheduler
@@ -147,6 +155,7 @@ class Videl3dDModel(BaseModel):
         self.optimizer_D.step()
 
     def optimize_parameters(self, step):
+        torch.autograd.set_detect_anomaly(True)
         self.set_requires_grad(self.netD, False)
         self.optimizer_G.zero_grad()
         self.fake_H = self.netG(self.var_L)
