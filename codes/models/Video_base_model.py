@@ -328,7 +328,11 @@ class MetaVideoModel(VideoBaseModel):
 
     def feed_data(self, data, need_GT=True):
         self.var_L = data['LQs'].to(self.device)
-        self.scale = data['scale'][0].item()
+        scale = data.get('scale', None)
+        if isinstance(scale, (float, int)) or scale is None:
+            self.scale = scale
+        else:
+            self.scale = data['scale'][0].item()
         if need_GT:
             self.real_H = data['GT'].to(self.device)
 
@@ -357,3 +361,13 @@ class MetaVideoModel(VideoBaseModel):
         # set log
         self.log_dict['l_pix'] = l_pix.item()
 
+    def test(self):
+        self.netG.eval()
+        with torch.no_grad():
+            N, K, C, H, W = self.var_L.size()
+            scale_coord_map, mask = self.input_matrix_wpn(H, W, self.scale)
+            if self.n_gpus > 1 and not self.opt['dist']:
+                scale_coord_map = torch.cat([scale_coord_map] * self.n_gpus, 0)
+                mask = torch.cat([mask] * self.n_gpus, 0)
+            self.fake_H = self.netG(self.var_L, self.scale, scale_coord_map, mask)
+        self.netG.train()

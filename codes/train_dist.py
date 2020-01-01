@@ -66,6 +66,7 @@ def main():
                 os.makedirs(opt['path']['models'])
                 os.makedirs(opt['path']['training_state'])
                 os.makedirs(opt['path']['val_images'])
+                os.makedirs(opt['path']['tb_logger'])
             resume_state = None
         else:
             # detect experiment directory and get the latest state
@@ -110,7 +111,7 @@ def main():
                 logger.info(
                     'You are using PyTorch {}. Tensorboard will use [tensorboardX]'.format(version))
                 from tensorboardX import SummaryWriter
-            tb_logger = SummaryWriter(log_dir='../tb_logger/' + opt['name'])
+            tb_logger = SummaryWriter(log_dir=opt['path']['tb_logger'])
     else:
         util.setup_logger('base', opt['path']['log'], 'train', level=logging.INFO, screen=True)
         logger = logging.getLogger('base')
@@ -208,126 +209,57 @@ def main():
                             tb_logger.add_scalar(k, v, current_step)
                 if rank <= 0:
                     logger.info(message)
-                    print("PROGRESS: {:02d}%".format(int(current_step/total_iters*100)))
+                    if current_step % (total_iters // 500) == 0:
+                        print("PROGRESS: {:02d}%".format(int(current_step/total_iters*100)))
             #### validation
             if opt['datasets'].get('val', None) and current_step % opt['train']['val_freq'] == 0:
-                if opt['model'] in ['sr', 'srgan'] and rank <= 0:  # image restoration validation
-                    # does not support multi-GPU validation
-                    pbar = util.ProgressBar(len(val_loader))
-                    avg_psnr = 0.
-                    idx = 0
-                    for val_data in val_loader:
-                        idx += 1
-                        img_name = os.path.splitext(os.path.basename(val_data['LQ_path'][0]))[0]
-                        img_dir = os.path.join(opt['path']['val_images'], img_name)
-                        util.mkdir(img_dir)
+                # video restoration validation
+                psnr_rlt = {}  # with border and center frames
+                if rank == 0:
+                    pbar = util.ProgressBar(len(val_set))
+                for idx in range(rank, len(val_set), world_size):
+                    val_data = val_set[idx]
+                    val_data['LQs'].unsqueeze_(0)
+                    val_data['GT'].unsqueeze_(0)
+                    folder = val_data['folder']
+                    idx_d, max_idx = val_data['idx'].split('/')
+                    idx_d, max_idx = int(idx_d), int(max_idx)
+                    if psnr_rlt.get(folder, None) is None:
+                        psnr_rlt[folder] = torch.zeros(max_idx, dtype=torch.float32,
+                                                       device='cuda')
+                    # tmp = torch.zeros(max_idx, dtype=torch.float32, device='cuda')
+                    model.feed_data(val_data)
+                    model.test()
+                    visuals = model.get_current_visuals()
+                    rlt_img = util.tensor2img(visuals['rlt'])  # uint8
+                    gt_img = util.tensor2img(visuals['GT'])  # uint8
+                    # calculate PSNR
+                    psnr_rlt[folder][idx_d] = util.calculate_psnr(rlt_img, gt_img)
 
-                        model.feed_data(val_data)
-                        model.test()
+                    if rank == 0:
+                        for _ in range(world_size):
+                            pbar.update('Test {} - {}/{}'.format(folder, idx_d, max_idx))
+                # # collect data
+                for _, v in psnr_rlt.items():
+                    dist.reduce(v, 0)
+                dist.barrier()
 
-                        visuals = model.get_current_visuals()
-                        sr_img = util.tensor2img(visuals['rlt'])  # uint8
-                        gt_img = util.tensor2img(visuals['GT'])  # uint8
-
-                        # Save SR images for reference
-                        save_img_path = os.path.join(img_dir,
-                                                     '{:s}_{:d}.png'.format(img_name, current_step))
-                        util.save_img(sr_img, save_img_path)
-
-                        # calculate PSNR
-                        sr_img, gt_img = util.crop_border([sr_img, gt_img], opt['scale'])
-                        avg_psnr += util.calculate_psnr(sr_img, gt_img)
-                        pbar.update('Test {}'.format(img_name))
-
-                    avg_psnr = avg_psnr / idx
-
-                    # log
-                    logger.info('# Validation # PSNR: {:.4e}'.format(avg_psnr))
-                    # tensorboard logger
+                if rank == 0:
+                    psnr_rlt_avg = {}
+                    psnr_total_avg = 0.
+                    for k, v in psnr_rlt.items():
+                        psnr_rlt_avg[k] = torch.mean(v).cpu().item()
+                        psnr_total_avg += psnr_rlt_avg[k]
+                    psnr_total_avg /= len(psnr_rlt)
+                    log_s = '# Validation # PSNR: {:.3f}:'.format(psnr_total_avg)
+                    for k, v in psnr_rlt_avg.items():
+                        log_s += ' {}: {:.3f}'.format(k, v)
+                    logger.info(log_s)
                     if opt['use_tb_logger'] and 'debug' not in opt['name']:
-                        tb_logger.add_scalar('psnr', avg_psnr, current_step)
-                else:  # video restoration validation
-                    if opt['dist']:
-                        # multi-GPU testing
-                        psnr_rlt = {}  # with border and center frames
-                        if rank == 0:
-                            pbar = util.ProgressBar(len(val_set))
-                        for idx in range(rank, len(val_set), world_size):
-                            val_data = val_set[idx]
-                            val_data['LQs'].unsqueeze_(0)
-                            val_data['GT'].unsqueeze_(0)
-                            folder = val_data['folder']
-                            idx_d, max_idx = val_data['idx'].split('/')
-                            idx_d, max_idx = int(idx_d), int(max_idx)
-                            if psnr_rlt.get(folder, None) is None:
-                                psnr_rlt[folder] = torch.zeros(max_idx, dtype=torch.float32,
-                                                               device='cuda')
-                            # tmp = torch.zeros(max_idx, dtype=torch.float32, device='cuda')
-                            model.feed_data(val_data)
-                            model.test()
-                            visuals = model.get_current_visuals()
-                            rlt_img = util.tensor2img(visuals['rlt'])  # uint8
-                            gt_img = util.tensor2img(visuals['GT'])  # uint8
-                            # calculate PSNR
-                            psnr_rlt[folder][idx_d] = util.calculate_psnr(rlt_img, gt_img)
-
-                            if rank == 0:
-                                for _ in range(world_size):
-                                    pbar.update('Test {} - {}/{}'.format(folder, idx_d, max_idx))
-                        # # collect data
-                        for _, v in psnr_rlt.items():
-                            dist.reduce(v, 0)
-                        dist.barrier()
-
-                        if rank == 0:
-                            psnr_rlt_avg = {}
-                            psnr_total_avg = 0.
-                            for k, v in psnr_rlt.items():
-                                psnr_rlt_avg[k] = torch.mean(v).cpu().item()
-                                psnr_total_avg += psnr_rlt_avg[k]
-                            psnr_total_avg /= len(psnr_rlt)
-                            log_s = '# Validation # PSNR: {:.4e}:'.format(psnr_total_avg)
-                            for k, v in psnr_rlt_avg.items():
-                                log_s += ' {}: {:.4e}'.format(k, v)
-                            logger.info(log_s)
-                            if opt['use_tb_logger'] and 'debug' not in opt['name']:
-                                tb_logger.add_scalar('psnr_avg', psnr_total_avg, current_step)
-                                for k, v in psnr_rlt_avg.items():
-                                    tb_logger.add_scalar(k, v, current_step)
-                    else:
-                        pbar = util.ProgressBar(len(val_loader))
-                        psnr_rlt = {}  # with border and center frames
-                        psnr_rlt_avg = {}
-                        psnr_total_avg = 0.
-                        for val_data in val_loader:
-                            folder = val_data['folder'][0]
-                            idx_d = val_data['idx'].item()
-                            # border = val_data['border'].item()
-                            if psnr_rlt.get(folder, None) is None:
-                                psnr_rlt[folder] = []
-
-                            model.feed_data(val_data)
-                            model.test()
-                            visuals = model.get_current_visuals()
-                            rlt_img = util.tensor2img(visuals['rlt'])  # uint8
-                            gt_img = util.tensor2img(visuals['GT'])  # uint8
-
-                            # calculate PSNR
-                            psnr = util.calculate_psnr(rlt_img, gt_img)
-                            psnr_rlt[folder].append(psnr)
-                            pbar.update('Test {} - {}'.format(folder, idx_d))
-                        for k, v in psnr_rlt.items():
-                            psnr_rlt_avg[k] = sum(v) / len(v)
-                            psnr_total_avg += psnr_rlt_avg[k]
-                        psnr_total_avg /= len(psnr_rlt)
-                        log_s = '# Validation # PSNR: {:.4e}:'.format(psnr_total_avg)
+                        tb_logger.add_scalar('psnr_avg', psnr_total_avg, current_step)
                         for k, v in psnr_rlt_avg.items():
-                            log_s += ' {}: {:.4e}'.format(k, v)
-                        logger.info(log_s)
-                        if opt['use_tb_logger'] and 'debug' not in opt['name']:
-                            tb_logger.add_scalar('psnr_avg', psnr_total_avg, current_step)
-                            for k, v in psnr_rlt_avg.items():
-                                tb_logger.add_scalar(k, v, current_step)
+                            tb_logger.add_scalar(k, v, current_step)
+            
 
             #### save models and training states
             if current_step % opt['logger']['save_checkpoint_freq'] == 0:

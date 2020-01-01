@@ -39,6 +39,7 @@ def main():
             os.makedirs(opt['path']['models'])
             os.makedirs(opt['path']['training_state'])
             os.makedirs(opt['path']['val_images'])
+            os.makedirs(opt['path']['tb_logger'])
             resume_state = None
         else:
             # detect experiment directory and get the latest state
@@ -81,7 +82,7 @@ def main():
             logger.info(
                 'You are using PyTorch {}. Tensorboard will use [tensorboardX]'.format(version))
             from tensorboardX import SummaryWriter
-        tb_logger = SummaryWriter(log_dir='../tb_logger/' + opt['name'])
+        tb_logger = SummaryWriter(log_dir=opt['path']['tb_logger'])
 
     # convert to NoneDict, which returns None for missing keys
     opt = option.dict_to_nonedict(opt)

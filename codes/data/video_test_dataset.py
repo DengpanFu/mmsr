@@ -25,6 +25,7 @@ class VideoTestDataset(data.Dataset):
         if self.data_type == 'lmdb':
             raise ValueError('No need to use LMDB during validation/test.')
         #### Generate data info and cache data
+        self.scale = opt['scale'][-1] if isinstance(opt['scale'], (tuple, list)) else opt['scale']
         self.imgs_LQ, self.imgs_GT = {}, {}
         if opt['name'].lower() in ['vid4', 'reds4']:
             subfolders_LQ = util.glob_file_list(self.LQ_root)
@@ -59,6 +60,7 @@ class VideoTestDataset(data.Dataset):
     def __getitem__(self, index):
         # path_LQ = self.data_info['path_LQ'][index]
         # path_GT = self.data_info['path_GT'][index]
+        scale = self.scale
         folder = self.data_info['folder'][index]
         idx, max_idx = self.data_info['idx'][index].split('/')
         idx, max_idx = int(idx), int(max_idx)
@@ -77,7 +79,8 @@ class VideoTestDataset(data.Dataset):
             'GT': img_GT,
             'folder': folder,
             'idx': self.data_info['idx'][index],
-            'border': border
+            'border': border, 
+            'scale': scale
         }
 
     def __len__(self):

@@ -33,7 +33,8 @@ def parse(opt_path, opt_list=None, is_train=True):
         phase = phase.split('_')[0]
         dataset['phase'] = phase
         if opt['distortion'] == 'sr':
-            dataset['scale'] = scale
+            # dataset['scale'] = scale
+            set_default_opt(dataset, 'scale', scale)
         is_lmdb = False
         if dataset.get('dataroot_GT', None) is not None:
             dataset['dataroot_GT'] = osp.expanduser(dataset['dataroot_GT'])
@@ -64,6 +65,7 @@ def parse(opt_path, opt_list=None, is_train=True):
         set_default_opt(opt['path'], 'training_state', osp.join(experiments_root, 'training_state'))
         set_default_opt(opt['path'], 'log', experiments_root)
         set_default_opt(opt['path'], 'val_images', osp.join(experiments_root, 'val_images'))
+        set_default_opt(opt['path'], 'tb_logger', osp.join(experiments_root, 'tb_logger'))
 
         # change some options for debug mode
         if 'debug' in opt['name']:
