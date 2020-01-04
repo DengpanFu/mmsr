@@ -32,7 +32,7 @@ def main():
                         help='Path to option YAML file.')
     parser.add_argument('--set', dest='set_opt', default=None, nargs=argparse.REMAINDER, 
                         help='set options')
-    parser.add_argument('--launcher', choices=['none', 'pytorch'], default='none',
+    parser.add_argument('--launcher', choices=['none', 'pytorch'], default='pytorch',
                         help='job launcher')
     parser.add_argument('--local_rank', type=int, default=0)
     args = parser.parse_args()
@@ -141,7 +141,7 @@ def main():
             train_size = int(math.ceil(len(train_set) / dataset_opt['batch_size']))
             total_iters = int(opt['train']['niter'])
             total_epochs = int(math.ceil(total_iters / train_size))
-            if dataset_opt['mode'] in ['MetaREDS', 'MetaREDSOnline']:
+            if dataset_opt['mode'] in ['MetaREDS', 'MetaREDSOnline', 'UPREDS']:
                 train_sampler = DistMetaIterSampler(train_set, world_size, rank, 
                     dataset_opt['batch_size'], len(opt['scale']), dataset_ratio)
                 total_epochs = int(math.ceil(total_iters / (train_size * dataset_ratio)))

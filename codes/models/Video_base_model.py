@@ -193,6 +193,30 @@ class VideoBaseModel(BaseModel):
     def save(self, iter_label):
         self.save_network(self.netG, 'G', iter_label)
 
+class UPVideoModel(VideoBaseModel):
+    def __init__(self, opt):
+        super(UPVideoModel, self).__init__(opt)
+
+    def feed_data(self, data, need_GT=True):
+        self.var_L = data['LQs'].to(self.device)
+        scale = data.get('scale', None)
+        if isinstance(scale, (float, int)) or scale is None:
+            self.scale = scale
+        else:
+            self.scale = data['scale'][0].item()
+        if need_GT:
+            self.real_H = data['GT'].to(self.device)
+
+    def optimize_parameters(self, step):
+        self.optimizer_G.zero_grad()
+        self.fake_H = self.netG(self.var_L, self.scale)
+
+        l_pix = self.l_pix_w * self.cri_pix(self.fake_H, self.real_H)
+        l_pix.backward()
+        self.optimizer_G.step()
+
+        # set log
+        self.log_dict['l_pix'] = l_pix.item()
 
 class MetaVideoModel(VideoBaseModel):
     def __init__(self, opt):

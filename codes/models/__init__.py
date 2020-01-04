@@ -14,6 +14,8 @@ def create_model(opt):
         from .Video_base_model import VideoBaseModel as M
     elif model == 'meta_video':
         from .Video_base_model import MetaVideoModel as M
+    elif model == 'up_video':
+        from .Video_base_model import UPVideoModel as M
     elif model == 'video_3d_D':
         from .Video_3dD_model import Videl3dDModel as M
     else:

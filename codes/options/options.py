@@ -2,6 +2,7 @@ import os
 import os.path as osp
 import logging
 import yaml
+import numpy as np
 from utils.util import OrderedYaml
 Loader, Dumper = OrderedYaml()
 
@@ -20,10 +21,15 @@ def parse(opt_path, opt_list=None, is_train=True):
     set_default_opt(opt['train'], 'reduction', 'sum')
     set_default_opt(opt['train'], 'fix_edvr', False)
 
-    if opt['scale'] == -1:
+    if opt['scale'] == -4:
         opt['scale'] = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, \
                         2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, \
                         3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0]
+    if opt['scale'] == -5:
+        opt['scale'] = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, \
+                        2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, \
+                        3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, \
+                        4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 5.0 ]
 
     if opt['distortion'] == 'sr':
         scale = opt['scale']
@@ -141,7 +147,6 @@ def parse(opt_path, opt_list=None, is_train=True):
         opt_from_list(opt, opt_list)
     return opt
 
-
 def set_default_opt(opt, key, value):
     if not key in opt:
         opt[key] = value
@@ -176,11 +181,9 @@ def dict2str(opt, indent_l=1):
             msg += ' ' * (indent_l * 2) + k + ': ' + str(v) + '\n'
     return msg
 
-
 class NoneDict(dict):
     def __missing__(self, key):
         return None
-
 
 # convert to NoneDict, which return None for missing key.
 def dict_to_nonedict(opt):
@@ -193,7 +196,6 @@ def dict_to_nonedict(opt):
         return [dict_to_nonedict(sub_opt) for sub_opt in opt]
     else:
         return opt
-
 
 def check_resume(opt, resume_iter):
     '''Check resume states and pretrain_model paths'''
