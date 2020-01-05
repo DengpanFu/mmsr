@@ -218,6 +218,12 @@ class UPVideoModel(VideoBaseModel):
         # set log
         self.log_dict['l_pix'] = l_pix.item()
 
+    def test(self):
+        self.netG.eval()
+        with torch.no_grad():
+            self.fake_H = self.netG(self.var_L, self.scale)
+        self.netG.train()
+
 class MetaVideoModel(VideoBaseModel):
     def __init__(self, opt):
         super(MetaVideoModel, self).__init__(opt)
