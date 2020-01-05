@@ -318,32 +318,151 @@ class EDVR(nn.Module):
         return out
 
 class UPEDVR(nn.Module):
-    def __init__(self, nf=64, nframes=5, groups=8, front_RBs=5, back_RBs=10, center=None,
-                 predeblur=False, HR_in=False, w_TSA=True):
+    def __init__(self, nf=64, nframes=5, groups=8, front_RBs=5, back_RBs=10, 
+        center=None, w_TSA=True, down_scale=False, align_target=True):
         super(UPEDVR, self).__init__()
         self.nf = nf
+        self.nframes = nframes
         self.center = nframes // 2 if center is None else center
-        self.is_predeblur = True if predeblur else False
-        self.HR_in = True if HR_in else False
         self.w_TSA = w_TSA
+        self.down_scale = down_scale
+        self.align_target = align_target
         ResidualBlock_noBN_f = functools.partial(arch_util.ResidualBlock_noBN, nf=nf)
 
         #### extract features (for each frame)
-        if self.is_predeblur:
-            self.pre_deblur = Predeblur_ResNet_Pyramid(nf=nf, HR_in=self.HR_in)
-            self.conv_1x1 = nn.Conv2d(nf, nf, 1, 1, bias=True)
+        if self.down_scale:
+            self.conv_first_1 = nn.Conv2d(3, nf, 3, 1, 1, bias=True)
+            self.conv_first_2 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
+            self.conv_first_3 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
         else:
-            if self.HR_in:
-                self.conv_first_1 = nn.Conv2d(3, nf, 3, 1, 1, bias=True)
-                self.conv_first_2 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
-                self.conv_first_3 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
-            else:
-                self.conv_first = nn.Conv2d(3, nf, 3, 1, 1, bias=True)
+            self.conv_first = nn.Conv2d(3, nf, 3, 1, 1, bias=True)
         self.feature_extraction = arch_util.make_layer(ResidualBlock_noBN_f, front_RBs)
         self.fea_L2_conv1 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
         self.fea_L2_conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
         self.fea_L3_conv1 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
         self.fea_L3_conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+
+        self.pcd_align = PCD_Align(nf=nf, groups=groups)
+        if self.w_TSA:
+            if self.align_target:
+                self.tsa_fusion = TSA_Fusion(nf=nf, nframes=nframes, center=self.center)
+            else:
+                self.tsa_fusion = TSA_Fusion(nf=nf, nframes=nframes - 1, center=self.center)
+        else:
+            if self.align_target:
+                self.tsa_fusion = nn.Conv2d(nframes * nf, nf, 1, 1, bias=True)
+            else:
+                self.tsa_fusion = nn.Conv2d((nframes - 1) * nf, nf, 1, 1, bias=True)
+        #### reconstruction
+        self.recon_trunk = arch_util.make_layer(ResidualBlock_noBN_f, back_RBs)
+        #### upsampling
+        self.upconv1 = nn.Conv2d(nf, nf * 4, 3, 1, 1, bias=True)
+        self.upconv2 = nn.Conv2d(nf, 64 * 4, 3, 1, 1, bias=True)
+        self.pixel_shuffle = nn.PixelShuffle(2)
+        self.HRconv = nn.Conv2d(64, 64, 3, 1, 1, bias=True)
+        self.conv_last = nn.Conv2d(64, 3, 3, 1, 1, bias=True)
+
+        #### activation function
+        self.lrelu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
+    
+    def forward(self, x, scale):
+        B, N, C, H, W = x.shape
+        x = x.view(-1, C, H, W)
+        x = F.interpolate(x, scale_factor=scale, mode='bilinear', 
+                            align_corners=False)
+        H, W = x.shape[-2:]
+        x = x.view(B, N, C, H, W)
+        x_center = x[:, self.center, :, :, :].contiguous()
+
+        # L1
+        if self.down_scale:
+            L1_fea = self.lrelu(self.conv_first_1(x.view(-1, C, H, W)))
+            L1_fea = self.lrelu(self.conv_first_2(L1_fea))
+            L1_fea = self.lrelu(self.conv_first_3(L1_fea))
+            H, W = H // 4, W // 4
+        else:
+            L1_fea = self.lrelu(self.conv_first(x.view(-1, C, H, W)))  # BN,64,64,64
+        L1_fea = self.feature_extraction(L1_fea)   # BN,64,64,64
+        # L2
+        L2_fea = self.lrelu(self.fea_L2_conv1(L1_fea))  # BN,64,32,32
+        L2_fea = self.lrelu(self.fea_L2_conv2(L2_fea))  # BN,64,32,32
+        # L3
+        L3_fea = self.lrelu(self.fea_L3_conv1(L2_fea))  # BN,64,16,16
+        L3_fea = self.lrelu(self.fea_L3_conv2(L3_fea))  # BN,64,16,16
+
+        L1_fea = L1_fea.view(B, N, -1, H, W)            # B,N,64,64,64
+        L2_fea = L2_fea.view(B, N, -1, H // 2, W // 2)  # B,N,64,32,32
+        L3_fea = L3_fea.view(B, N, -1, H // 4, W // 4)  # B,N,64,16,16
+
+        #### pcd align
+        # ref feature list
+        ref_fea_l = [L1_fea[:, self.center, :, :, :].clone(), 
+                     L2_fea[:, self.center, :, :, :].clone(),
+                     L3_fea[:, self.center, :, :, :].clone()]  
+                   # [(B,64,64,64), (B,64,32,32), (B,64,16,16)]
+        aligned_fea = []
+        for i in range(N):
+            if i != self.center:
+                nbr_fea_l = [L1_fea[:, i, :, :, :].clone(), 
+                             L2_fea[:, i, :, :, :].clone(),
+                             L3_fea[:, i, :, :, :].clone()]
+                aligned_fea.append(self.pcd_align(nbr_fea_l, ref_fea_l))  
+                # N-1,(B,64,64,64)
+        aligned_fea = torch.stack(aligned_fea, dim=1)  # [B, N-1, C, H, W]
+
+        if not self.w_TSA:
+            aligned_fea = aligned_fea.view(B, -1, H, W)  # B,NC,64,64
+        fea = self.tsa_fusion(aligned_fea)   # B,C,64,64
+
+        out = self.recon_trunk(fea)   # B,C,64,64
+        out = self.lrelu(self.pixel_shuffle(self.upconv1(out)))  # B,C,128,128
+        out = self.lrelu(self.pixel_shuffle(self.upconv2(out)))  # B,C,256,256
+        out = self.lrelu(self.HRconv(out))    # B,C,256,256
+        out = self.conv_last(out)    # B,3,256,256
+        out += x_center
+        return out
+
+
+class Scale2Weight(nn.Module):
+    def __init__(self, kernel_size=3, inC=64, outC=64, dims=[8]):
+        super(Scale2Weight,self).__init__()
+        self.kernel_size=kernel_size
+        self.inC = inC
+        self.outC = outC
+        self.dims = dims
+        fcs = []
+        in_dim = 1
+        for dim in self.dims:
+            fcs.append(nn.Linear(in_dim, dim))
+            fcs.append(nn.ReLU(inplace=True))
+            in_dim = dim
+        fcs.append(nn.Linear(in_dim, self.kernel_size*self.kernel_size*self.inC*self.outC))
+        self.scale_block=nn.Sequential(*fcs)
+
+    def forward(self, scale, input):
+        weight = self.scale_block(scale)
+        weight = weight.view(self.outC, self.inC, self.kernel_size, self.kernel_size)
+        output = F.conv2d(input, weight, padding=1)
+        return output
+
+class UPControlEDVR(nn.Module):
+    def __init__(self, nf=64, nframes=5, groups=8, front_RBs=5, back_RBs=10, 
+                 center=None, w_TSA=True):
+        super(UPControlEDVR, self).__init__()
+        self.nf = nf
+        self.center = nframes // 2 if center is None else center
+        self.w_TSA = w_TSA
+        ResidualBlock_noBN_f = functools.partial(arch_util.ResidualBlock_noBN, nf=nf)
+
+        #### extract features (for each frame)
+        self.conv_first = nn.Conv2d(3, nf, 3, 1, 1, bias=True)
+        self.feature_extraction = arch_util.make_layer(ResidualBlock_noBN_f, front_RBs)
+        self.fea_L2_conv1 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
+        self.fea_L2_conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+        self.fea_L3_conv1 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
+        self.fea_L3_conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+        
+        self.control_conv = Scale2Weight(kernel_size=3, inC=nf, outC=nf)
 
         self.pcd_align = PCD_Align(nf=nf, groups=groups)
         if self.w_TSA:
@@ -373,19 +492,7 @@ class UPEDVR(nn.Module):
         x_center = x[:, self.center, :, :, :].contiguous()
 
         # L1
-        if self.is_predeblur:
-            L1_fea = self.pre_deblur(x.view(-1, C, H, W))
-            L1_fea = self.conv_1x1(L1_fea)
-            if self.HR_in:
-                H, W = H // 4, W // 4
-        else:
-            if self.HR_in:
-                L1_fea = self.lrelu(self.conv_first_1(x.view(-1, C, H, W)))
-                L1_fea = self.lrelu(self.conv_first_2(L1_fea))
-                L1_fea = self.lrelu(self.conv_first_3(L1_fea))
-                H, W = H // 4, W // 4
-            else:
-                L1_fea = self.lrelu(self.conv_first(x.view(-1, C, H, W)))  # BN,64,64,64
+        L1_fea = self.lrelu(self.conv_first(x.view(-1, C, H, W)))  # BN,64,64,64
         L1_fea = self.feature_extraction(L1_fea)   # BN,64,64,64
         # L2
         L2_fea = self.lrelu(self.fea_L2_conv1(L1_fea))  # BN,64,32,32
@@ -418,13 +525,15 @@ class UPEDVR(nn.Module):
         fea = self.tsa_fusion(aligned_fea)   # B,C,64,64
 
         out = self.recon_trunk(fea)   # B,C,64,64
+
+        out = self.control_conv(scale, out)
+
         out = self.lrelu(self.up_conv1(out))  # B,C,128,128
         out = self.lrelu(self.up_conv2(out))  # B,C,256,256
         out = self.lrelu(self.HRconv(out))    # B,C,256,256
         out = self.conv_last(out)    # B,3,256,256
         out += x_center
         return out
-
 
 
 class MultiEDVR(nn.Module):

@@ -18,13 +18,14 @@ datasets:
     random_reverse: false
     border_mode: false
     dataroot_GT: /home/dengpanfu/SR/mmsr/datasets/REDS/train_sharp
-    dataroot_LQ: /home/dengpanfu/SR/mmsr/datasets/REDS/train_sharp_bicubic
+    # dataroot_GT: ../datasets/REDS/train_sharp_wval.lmdb
+    # dataroot_LQ: /home/dengpanfu/SR/mmsr/datasets/REDS/train_sharp_bicubic
     cache_keys: ~
     ratio: 200
 
     N_frames: 5
     use_shuffle: true
-    n_workers: 3 # per GPU
+    n_workers: 0 # per GPU
     batch_size: 4
     GT_size: 256
     use_flip: true
@@ -53,6 +54,8 @@ network_G:
   predeblur: false
   HR_in: false
   w_TSA: false
+  down_scale: True
+  align_target: False
 
 #### path
 path:
@@ -82,5 +85,5 @@ train:
 
 #### logger
 logger:
-  print_freq: 10
+  print_freq: 100
   save_checkpoint_freq: !!float 5e3
