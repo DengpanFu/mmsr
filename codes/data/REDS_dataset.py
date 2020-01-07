@@ -172,10 +172,94 @@ class REDSDataset(data.Dataset):
                             np.transpose(img_GT, (2, 0, 1)))).float()
         img_LQs = torch.from_numpy(np.ascontiguousarray(
                             np.transpose(img_LQs, (0, 3, 1, 2)))).float()
-        return {'LQs': img_LQs, 'GT': img_GT, 'key': key, 'scale': self.scale}
+        return {'LQs': img_LQ, 'GT': img_GT, 'key': key, 'scale': self.scale}
 
     def __len__(self):
         return len(self.paths_GT)
+
+class REDSImgDataset(data.Dataset):
+    def __init__(self, opt):
+        super(REDSImgDataset, self).__init__()
+        self.opt = opt
+        self.GT_root, self.LQ_root = opt['dataroot_GT'], opt['dataroot_LQ']
+        self.data_type = self.opt['data_type']
+        self.scale = opt['scale']
+        self.GT_size = self.opt['GT_size']
+        self.LQ_size = int(self.GT_size / self.scale)
+
+        if self.data_type == 'lmdb':
+            self.paths_GT, self.GT_size_tuple = util.get_image_paths(
+                                self.data_type, self.GT_root)
+            logger.info('Using lmdb meta info for cache keys.')
+            self.paths_GT = [v for v in self.paths_GT if v.split('_')[0] not in \
+                            ['000', '011', '015', '020']]
+            self.LQ_size_tuple = [self.GT_size_tuple[0], int(self.GT_size_tuple[1] \
+                            / self.scale), int(self.GT_size_tuple[2] / self.scale)]
+        else:
+            seqs = sorted(os.listdir(self.GT_root))
+            self.paths_GT = []
+            for seq in seqs:
+                if not seq in ['000', '011', '015', '020']:
+                    names = os.listdir(osp.join(self.GT_root, seq))
+                    self.paths_GT.extend([seq + '_' + x[:-4] for x in names])
+        assert self.paths_GT, 'Error: GT path is empty.'
+
+        if self.data_type == 'lmdb':
+            self.GT_env, self.LQ_env = None, None
+
+    def _init_lmdb(self):
+        # https://github.com/chainer/chainermn/issues/129
+        self.GT_env = lmdb.open(self.GT_root, readonly=True, lock=False, 
+                                readahead=False, meminit=False)
+        self.LQ_env = lmdb.open(self.LQ_root, readonly=True, lock=False, 
+                                readahead=False, meminit=False)
+
+    def read_img(self, key, is_gt=False):
+        if self.data_type == 'lmdb':
+            env = self.GT_env if is_gt else self.LQ_env
+            sizes = self.GT_size_tuple if is_gt else self.LQ_size_tuple
+            img = util.read_img(env, key, sizes)
+        else:
+            data_root = self.GT_root if is_gt else self.LQ_root
+            name_a, name_b = key.split('_')
+            im_path = osp.join(data_root, name_a, name_b + '.png')
+            img = util.read_img(None, path)
+        return img
+
+    def __getitem__(self, index):
+        if self.data_type == 'lmdb' and self.GT_env is None:
+            self._init_lmdb()
+
+        key = self.paths_GT[index]
+        img_GT = self.read_img(key, True)
+        img_LQ = self.read_img(key, False)
+
+        if self.opt['phase'] == 'train':
+            H, W, _ = img_LQ.shape
+            rnd_h = random.randint(0, max(0, H - self.LQ_size))
+            rnd_w = random.randint(0, max(0, W - self.LQ_size))
+            img_LQ = img_LQ[rnd_h:rnd_h+self.LQ_size, rnd_w:rnd_w+self.LQ_size, :]
+            rnd_h_HR, rnd_w_HR = int(rnd_h * self.scale), int(rnd_w * self.scale)
+            
+            img_GT = img_GT[rnd_h_HR : rnd_h_HR + self.GT_size, \
+                                rnd_w_HR : rnd_w_HR + self.GT_size, :]
+            # augmentation - flip, rotate
+            img_LQ, img_GT = util.augment([img_LQ, img_GT], self.opt['use_flip'], 
+                                    self.opt['use_rot'])
+        
+        # BGR ==> RGB
+        img_GT, img_LQ = img_GT[:,:,(2,1,0)], img_LQ[:,:,(2,1,0)]
+        # HWC ==> CHW
+        img_GT = torch.from_numpy(np.ascontiguousarray(
+                            np.transpose(img_GT, (2, 0, 1)))).float()
+        img_LQ = torch.from_numpy(np.ascontiguousarray(
+                            np.transpose(img_LQ, (2, 0, 1)))).float()
+        return {'LQs': img_LQ, 'GT': img_GT, 'key': key, 'scale': self.scale}
+
+    def __len__(self):
+        return len(self.paths_GT)
+
+
 
 class MultiREDSDataset(REDSDataset):
     def __init__(self, opt):

@@ -145,7 +145,7 @@ def main():
                 train_sampler = DistMetaIterSampler(train_set, world_size, rank, 
                     dataset_opt['batch_size'], len(opt['scale']), dataset_ratio)
                 total_epochs = int(math.ceil(total_iters / (train_size * dataset_ratio)))
-            elif dataset_opt['mode'] in ['REDS', 'MultiREDS']:
+            elif dataset_opt['mode'] in ['REDS', 'MultiREDS', 'REDSImg']:
                 train_sampler = DistIterSampler(train_set, world_size, rank, dataset_ratio)
             else:
                 train_sampler = None

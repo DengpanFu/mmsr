@@ -51,6 +51,66 @@ class ResidualBlock_noBN(nn.Module):
         out = self.conv2(out)
         return identity + out
 
+class ResidualBlock_IN(nn.Module):
+    '''Residual block InstanceNorm
+    ---Conv-ReLU-Conv-+-
+     |________________|
+    '''
+
+    def __init__(self, nf=64):
+        super(ResidualBlock_IN, self).__init__()
+        self.conv1 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+        self.norm1 = nn.InstanceNorm2d(nf, affine=True)
+        self.conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+        self.norm2 = nn.InstanceNorm2d(nf, affine=True)
+        self.relu = nn.ReLU(True)
+
+        # initialization
+        # initialize_weights([self.conv1, self.conv2], 0.1)
+
+    def forward(self, x):
+        identity = x
+        out = self.relu(self.norm1(self.conv1(x)))
+        out = self.relu(self.norm2(self.conv2(out)))
+        return identity + out
+
+class ResidualBlock(nn.Module):
+    '''Residual block InstanceNorm
+    ---Conv-ReLU-Conv-+-
+     |________________|
+    '''
+
+    def __init__(self, nf=64, norm=None):
+        super(ResidualBlock_IN, self).__init__()
+        self.nf = nf
+        self.norm = norm
+        self.conv1 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+        self.conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+        if not norm is None:
+            if norm.lower() == 'in':
+                self.norm1 = nn.InstanceNorm2d(nf, affine=True)
+                self.norm2 = nn.InstanceNorm2d(nf, affine=True)
+            elif norm.lower == 'bn':
+                self.norm1 = nn.BatchNorm2d(nf)
+                self.norm2 = nn.BatchNorm2d(nf)
+        self.relu = nn.ReLU(True)
+
+        init_modules = [self.conv1, self.conv2]
+        # initialization
+        if not norm is None:
+            init_modules.extend([self.norm1, self.norm2])
+        initialize_weights(init_modules, 0.1)
+
+    def forward(self, x):
+        identity = x
+        if not self.norm is None:
+            out = self.relu(self.norm1(self.conv1(x)))
+            out = self.relu(self.norm2(self.conv2(out)))
+        else:
+            out = self.relu(self.conv1(x))
+            out = self.conv2(out)
+        return identity + out
+
 
 def flow_warp(x, flow, interp_mode='bilinear', padding_mode='zeros'):
     """Warp an image or feature map with optical flow

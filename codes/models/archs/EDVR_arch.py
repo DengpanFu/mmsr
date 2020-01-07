@@ -97,6 +97,16 @@ class PCD_Align(nn.Module):
 
         self.lrelu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
 
+        # nn.init.normal_(self.L3_offset_conv2.weight, 0, 0.001)
+        # nn.init.normal_(self.L2_offset_conv3.weight, 0, 0.001)
+        # nn.init.normal_(self.L1_offset_conv3.weight, 0, 0.001)
+        # nn.init.normal_(self.cas_offset_conv2.weight, 0, 0.001)
+        # nn.init.constant_(self.L3_offset_conv2.bias, 0)
+        # nn.init.constant_(self.L2_offset_conv3.bias, 0)
+        # nn.init.constant_(self.L1_offset_conv3.bias, 0)
+        # nn.init.constant_(self.cas_offset_conv2.bias, 0)
+        
+
     def forward(self, nbr_fea_l, ref_fea_l):
         '''align other neighboring frames to the reference frame in the feature level
         nbr_fea_l, ref_fea_l: [L1, L2, L3], each with [B,C,H,W] features
@@ -287,22 +297,7 @@ class EDVR(nn.Module):
 
         #### pcd align
         # ref feature list
-        ref_fea_l = [
-            L1_fea[:, self.center, :, :, :].clone(), L2_fea[:, self.center, :, :, :].clone(),
-            L3_fea[:, self.center, :, :, :].clone()
-        ]   # [(B,64,64,64), (B,64,32,32), (B,64,16,16)]
-        aligned_fea = []
-        for i in range(N):
-            nbr_fea_l = [
-                L1_fea[:, i, :, :, :].clone(), L2_fea[:, i, :, :, :].clone(),
-                L3_fea[:, i, :, :, :].clone()
-            ]
-            aligned_fea.append(self.pcd_align(nbr_fea_l, ref_fea_l))  # N,(B,64,64,64)
-        aligned_fea = torch.stack(aligned_fea, dim=1)  # [B, N, C, H, W]
-
-        if not self.w_TSA:
-            aligned_fea = aligned_fea.view(B, -1, H, W)  # B,NC,64,64
-        fea = self.tsa_fusion(aligned_fea)   # B,C,64,64
+        ref_fea_l  # B,C,64,64
 
         out = self.recon_trunk(fea)   # B,C,64,64
         out = self.lrelu(self.pixel_shuffle(self.upconv1(out)))  # B,C,128,128
@@ -316,6 +311,59 @@ class EDVR(nn.Module):
                         align_corners=False)    # B,3,256,256
         out += base
         return out
+
+class EDVRImage(nn.Module):
+    def __init__(self, nf=64, front_RBs=5, back_RBs=10, down_scale=True):
+        super(EDVRImage, self).__init__()
+        self.nf = nf
+        self.front_RBs = front_RBs
+        self.back_RBs = back_RBs
+        self.down_scale = down_scale
+        ResidualBlock_noBN_f = functools.partial(arch_util.ResidualBlock_noBN, nf=nf)
+
+        #### extract features (for each frame)
+        if self.down_scale:
+            self.conv_first_1 = nn.Conv2d(3, nf, 3, 1, 1, bias=True)
+            self.conv_first_2 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
+            self.conv_first_3 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
+        else:
+            self.conv_first = nn.Conv2d(3, nf, 3, 1, 1, bias=True)
+        self.feature_extraction = arch_util.make_layer(ResidualBlock_noBN_f, front_RBs)
+
+        #### reconstruction
+        self.recon_trunk = arch_util.make_layer(ResidualBlock_noBN_f, back_RBs)
+        #### upsampling
+        self.upconv1 = nn.Conv2d(nf, nf * 4, 3, 1, 1, bias=True)
+        self.upconv2 = nn.Conv2d(nf, 64 * 4, 3, 1, 1, bias=True)
+        self.pixel_shuffle = nn.PixelShuffle(2)
+        self.HRconv = nn.Conv2d(64, 64, 3, 1, 1, bias=True)
+        self.conv_last = nn.Conv2d(64, 3, 3, 1, 1, bias=True)
+
+        #### activation function
+        self.lrelu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
+
+    def forward(self, x, scale):
+        N, C, H, W = x.size()
+        if self.down_scale:
+            x = F.interpolate(x, scale_factor=scale, mode='bilinear', align_corners=False)
+            base = x
+            feat = self.lrelu(self.conv_first_1(x))
+            feat = self.lrelu(self.conv_first_2(feat))
+            feat = self.lrelu(self.conv_first_3(feat))
+            # H, W = H // 4, W // 4
+        else:
+            base = F.interpolate(x, scale_factor=scale, mode='bilinear', align_corners=False)
+            feat = self.lrelu(self.conv_first(x))
+        feat = self.feature_extraction(feat)   # BN,64,64,64
+
+        out = self.recon_trunk(feat)   # B,C,64,64
+        out = self.lrelu(self.pixel_shuffle(self.upconv1(out)))  # B,C,128,128
+        out = self.lrelu(self.pixel_shuffle(self.upconv2(out)))  # B,C,256,256
+        out = self.lrelu(self.HRconv(out))    # B,C,256,256
+        out = self.conv_last(out)    # B,3,256,256
+        out += base
+        return out
+
 
 class UPEDVR(nn.Module):
     def __init__(self, nf=64, nframes=5, groups=8, front_RBs=5, back_RBs=10, 
@@ -402,6 +450,147 @@ class UPEDVR(nn.Module):
                    # [(B,64,64,64), (B,64,32,32), (B,64,16,16)]
         aligned_fea = []
         for i in range(N):
+            if not self.align_target and (i == self.center): continue
+            nbr_fea_l = [L1_fea[:, i, :, :, :].clone(), 
+                         L2_fea[:, i, :, :, :].clone(),
+                         L3_fea[:, i, :, :, :].clone()]
+            aligned_fea.append(self.pcd_align(nbr_fea_l, ref_fea_l))  
+            # N-1,(B,64,64,64)
+        aligned_fea = torch.stack(aligned_fea, dim=1)  # [B, N-1, C, H, W]
+
+        if not self.w_TSA:
+            aligned_fea = aligned_fea.view(B, -1, H, W)  # B,NC,64,64
+        fea = self.tsa_fusion(aligned_fea)   # B,C,64,64
+
+        out = self.recon_trunk(fea)   # B,C,64,64
+        out = self.lrelu(self.pixel_shuffle(self.upconv1(out)))  # B,C,128,128
+        out = self.lrelu(self.pixel_shuffle(self.upconv2(out)))  # B,C,256,256
+        out = self.lrelu(self.HRconv(out))    # B,C,256,256
+        out = self.conv_last(out)    # B,3,256,256
+        out += x_center
+        return out
+
+class UPEDVRV1(nn.Module):
+    def __init__(self, nf=64, nframes=5, groups=8, front_RBs=5, back_RBs=10, 
+        center=None, w_TSA=True, down_scale=False, align_target=True, norm=None):
+        super(UPEDVR, self).__init__()
+        self.nf = nf
+        self.nframes = nframes
+        self.center = nframes // 2 if center is None else center
+        self.w_TSA = w_TSA
+        self.down_scale = down_scale
+        self.align_target = align_target
+        self.norm = norm
+        ResidualBlock_noBN_f = functools.partial(arch_util.ResidualBlock_IN, nf=nf)
+
+        #### extract features (for each frame)
+        if self.down_scale:
+            self.conv_first_1 = nn.Conv2d(3, nf, 3, 1, 1, bias=True)
+            if norm is not None: self.norm_first_1 = nn.InstanceNorm2d(nf, affine=True)
+            self.conv_first_2 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
+            if norm is not None: self.norm_first_2 = nn.InstanceNorm2d(nf, affine=True)
+            self.conv_first_3 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
+            if norm is not None: self.norm_first_3 = nn.InstanceNorm2d(nf, affine=True)
+        else:
+            self.conv_first = nn.Conv2d(3, nf, 3, 1, 1, bias=True)
+            if norm is not None: self.norm_first = nn.InstanceNorm2d(nf, affine=True)
+        self.feature_extraction = arch_util.make_layer(ResidualBlock_noBN_f, front_RBs)
+        self.fea_L2_conv1 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
+        if norm is not None: self.norm_L2_1 = nn.InstanceNorm2d(nf, affine=True)
+        self.fea_L2_conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+        if norm is not None: self.norm_L2_2 = nn.InstanceNorm2d(nf, affine=True)
+        self.fea_L3_conv1 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
+        if norm is not None: self.norm_L3_1 = nn.InstanceNorm2d(nf, affine=True)
+        self.fea_L3_conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+        if norm is not None: self.norm_L3_2 = nn.InstanceNorm2d(nf, affine=True)
+
+        self.pcd_align = PCD_Align(nf=nf, groups=groups)
+        if self.w_TSA:
+            if self.align_target:
+                self.tsa_fusion = TSA_Fusion(nf=nf, nframes=nframes, center=self.center)
+            else:
+                self.tsa_fusion = TSA_Fusion(nf=nf, nframes=nframes - 1, center=self.center)
+        else:
+            if self.align_target:
+                self.tsa_fusion = nn.Conv2d(nframes * nf, nf, 1, 1, bias=True)
+            else:
+                self.tsa_fusion = nn.Conv2d((nframes - 1) * nf, nf, 1, 1, bias=True)
+            # if norm is not None: self.norm_tsa = nn.InstanceNorm2d(nf, affine=True)
+        #### reconstruction
+        self.recon_trunk = arch_util.make_layer(ResidualBlock_noBN_f, back_RBs)
+        #### upsampling
+        self.upconv1 = nn.Conv2d(nf, nf * 4, 3, 1, 1, bias=True)
+        if norm is not None: self.norm_up_1 = nn.InstanceNorm2d(nf * 4, affine=True)
+        self.upconv2 = nn.Conv2d(nf, 64 * 4, 3, 1, 1, bias=True)
+        if norm is not None: self.norm_up_2 = nn.InstanceNorm2d(64 * 4, affine=True)
+        self.pixel_shuffle = nn.PixelShuffle(2)
+        self.HRconv = nn.Conv2d(64, 64, 3, 1, 1, bias=True)
+        if norm is not None: self.norm_hr = nn.InstanceNorm2d(64, affine=True)
+        self.conv_last = nn.Conv2d(64, 3, 3, 1, 1, bias=True)
+        # if norm is not None: self.norm_last = nn.InstanceNorm2d(64, affine=True)
+
+        #### activation function
+        self.lrelu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
+    
+    def get_norm(self, nc):
+        if self.norm == None:
+            return None
+        elif self.norm.lower() == 'bn':
+            return nn.BatchNorm2d(nc)
+        elif self.norm.lower() == 'in':
+            return nn.InstanceNorm2d(nc, affine=True)
+        else:
+            return None
+
+    def forward(self, x, scale):
+        B, N, C, H, W = x.shape
+        x = x.view(-1, C, H, W)
+        x = F.interpolate(x, scale_factor=scale, mode='bilinear', 
+                            align_corners=False)
+        H, W = x.shape[-2:]
+        x = x.view(B, N, C, H, W)
+        x_center = x[:, self.center, :, :, :].contiguous()
+
+        # L1
+        if self.down_scale:
+            if self.norm:
+                L1_fea = self.lrelu(self.norm_first_1(self.conv_first_1(x.view(-1, C, H, W))))
+                L1_fea = self.lrelu(self.norm_first_2(self.conv_first_2(L1_fea)))
+                L1_fea = self.lrelu(self.norm_first_3(self.conv_first_3(L1_fea)))
+            else:
+                L1_fea = self.lrelu(self.conv_first_1(x.view(-1, C, H, W)))
+                L1_fea = self.lrelu(self.conv_first_2(L1_fea))
+                L1_fea = self.lrelu(self.conv_first_3(L1_fea))
+            H, W = H // 4, W // 4
+        else:
+            if self.norm:
+                L1_fea = self.lrelu(self.norm_first(self.conv_first(x.view(-1, C, H, W))))
+            else:
+                L1_fea = self.lrelu(self.conv_first(x.view(-1, C, H, W)))  # BN,64,64,64
+        L1_fea = self.feature_extraction(L1_fea)   # BN,64,64,64
+        if self.norm:
+            L2_fea = self.lrelu(self.norm_L2_1(self.fea_L2_conv1(L1_fea)))  # BN,64,32,32
+            L2_fea = self.lrelu(self.norm_L2_2(self.fea_L2_conv2(L2_fea)))  # BN,64,32,32
+            L3_fea = self.lrelu(self.norm_L3_1(self.fea_L3_conv1(L2_fea)))  # BN,64,16,16
+            L3_fea = self.lrelu(self.norm_L3_2(self.fea_L3_conv2(L3_fea)))  # BN,64,16,16
+        else:
+            L2_fea = self.lrelu(self.fea_L2_conv1(L1_fea))  # BN,64,32,32
+            L2_fea = self.lrelu(self.fea_L2_conv2(L2_fea))  # BN,64,32,32
+            L3_fea = self.lrelu(self.fea_L3_conv1(L2_fea))  # BN,64,16,16
+            L3_fea = self.lrelu(self.fea_L3_conv2(L3_fea))  # BN,64,16,16
+
+        L1_fea = L1_fea.view(B, N, -1, H, W)            # B,N,64,64,64
+        L2_fea = L2_fea.view(B, N, -1, H // 2, W // 2)  # B,N,64,32,32
+        L3_fea = L3_fea.view(B, N, -1, H // 4, W // 4)  # B,N,64,16,16
+
+        #### pcd align
+        # ref feature list
+        ref_fea_l = [L1_fea[:, self.center, :, :, :].clone(), 
+                     L2_fea[:, self.center, :, :, :].clone(),
+                     L3_fea[:, self.center, :, :, :].clone()]  
+                   # [(B,64,64,64), (B,64,32,32), (B,64,16,16)]
+        aligned_fea = []
+        for i in range(N):
             if i != self.center:
                 nbr_fea_l = [L1_fea[:, i, :, :, :].clone(), 
                              L2_fea[:, i, :, :, :].clone(),
@@ -415,9 +604,14 @@ class UPEDVR(nn.Module):
         fea = self.tsa_fusion(aligned_fea)   # B,C,64,64
 
         out = self.recon_trunk(fea)   # B,C,64,64
-        out = self.lrelu(self.pixel_shuffle(self.upconv1(out)))  # B,C,128,128
-        out = self.lrelu(self.pixel_shuffle(self.upconv2(out)))  # B,C,256,256
-        out = self.lrelu(self.HRconv(out))    # B,C,256,256
+        if self.norm:
+            out = self.pixel_shuffle(self.lrelu(self.norm_up_1(self.upconv1(out))))
+            out = self.pixel_shuffle(self.lrelu(self.norm_up_2(self.upconv2(out))))
+            out = self.lrelu(self.norm_hr(self.HRconv(out)))
+        else:
+            out = self.lrelu(self.pixel_shuffle(self.upconv1(out)))  # B,C,128,128
+            out = self.lrelu(self.pixel_shuffle(self.upconv2(out)))  # B,C,256,256
+            out = self.lrelu(self.HRconv(out))    # B,C,256,256
         out = self.conv_last(out)    # B,3,256,256
         out += x_center
         return out

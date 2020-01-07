@@ -82,7 +82,7 @@ def read_img(env, path, size=None):
         img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
     else:
         img = _read_img_lmdb(env, path, size)
-    # img = img.astype(np.float32) / 255.
+    img = img.astype(np.float32) / 255.
     if img.ndim == 2:
         img = np.expand_dims(img, axis=2)
     # some images have 4 channels

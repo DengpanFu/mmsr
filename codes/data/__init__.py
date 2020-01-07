@@ -37,6 +37,8 @@ def create_dataset(dataset_opt):
     # datasets for video restoration
     elif mode == 'REDS':
         from data.REDS_dataset import REDSDataset as D
+    elif mode == 'REDSImg':
+        from data.REDS_dataset import REDSImgDataset as D
     elif mode == 'MultiREDS':
         from data.REDS_dataset import MultiREDSDataset as D
     elif mode == 'MetaREDS':
@@ -49,6 +51,8 @@ def create_dataset(dataset_opt):
         from data.Vimeo90K_dataset import Vimeo90KDataset as D
     elif mode == 'video_test':
         from data.video_test_dataset import VideoTestDataset as D
+    elif mode == 'img_test':
+        from data.video_test_dataset import ImgTestDataset as D
     else:
         raise NotImplementedError('Dataset [{:s}] is not recognized.'.format(mode))
     dataset = D(dataset_opt)
