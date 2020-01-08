@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as F
-
+from modules.deform_conv3d import DeformConv3d, DeformConv3dPack, DeformConv3dPack_v2
 
 def initialize_weights(net_l, scale=1):
     if not isinstance(net_l, list):
@@ -111,6 +111,71 @@ class ResidualBlock(nn.Module):
             out = self.conv2(out)
         return identity + out
 
+class ResidualBlock_3D(nn.Module):
+    '''Residual block w/o BN
+    ---Conv-ReLU-Conv-+-
+     |________________|
+    '''
+
+    def __init__(self, planes=64, conv_type='normal', padding_mode='const', 
+        has_bias=True, if_relu=False):
+        super(ResidualBlock_3D, self).__init__()
+        self.planes = planes
+        self.conv_type = conv_type
+        self.padding_mode = padding_mode
+        self.has_bias = has_bias
+        self.if_relu = if_relu
+
+        if self.conv_type == "deformv2":
+            self.conv1 = DeformConv3dPack_v2(planes, planes, kernel_size=(3, 3, 3), 
+                            stride=(1, 1, 1), padding=(0, 0, 0), bias=has_bias)
+        elif self.conv_type == "deform":
+            self.conv1 = DeformConv3dPack(planes, planes, kernel_size=(3, 3, 3), 
+                            stride=(1, 1, 1), padding=(0, 0, 0), bias=has_bias)
+        elif self.conv_type == "normal":
+            self.conv1 = nn.Conv3d(planes, planes, kernel_size=(3, 3, 3), 
+                            stride=(1, 1, 1), padding=(0, 0, 0), bias=has_bias)
+        else:
+            raise TypeError('Unknown Conv3d type: {}'.format(self.conv_type))
+
+        self.bn1 = nn.BatchNorm3d(planes)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv3d(planes, planes, kernel_size=(3, 3, 3), 
+                        stride=(1, 1, 1), padding=(0, 0, 0), bias=has_bias)
+        self.bn2 = nn.BatchNorm3d(planes)
+
+        if padding_mode == "const":
+            self.pad1 = nn.ReplicationPad3d((1,1,1,1,1,1))
+            self.pad2 = nn.ReplicationPad3d((1,1,1,1,1,1))
+        elif padding_mode == "zero":
+            self.pad1 = nn.ConstantPad3d((1,1,1,1,1,1),0)
+            self.pad2 = nn.ConstantPad3d((1,1,1,1,1,1),0)
+        else:
+            raise TypeError("Wrong padding: {}, Only support padding mode: (const, zero)".
+                                format(self.padding_mode))
+
+        self.model = nn.Sequential(self.pad1, self.conv1, self.bn1, 
+                            self.relu, self.pad2, self.conv2, self.bn2)
+
+        # initialization
+        self.init_weights()
+
+    def forward(self, x):
+        out = x + self.model(x)
+        if self.if_relu:
+            out = self.relu(out)
+        return out
+
+    def init_weights(self, scale=0.1):
+        for m in self.modules():
+            if isinstance(m, (nn.Conv3d, DeformConv3dPack, DeformConv3dPack_v2)):
+                init.kaiming_normal_(m.weight, a=0, mode='fan_in')
+                m.weight.data *= scale  # for residual block
+                if m.bias is not None:
+                    m.bias.data.zero_()
+            elif isinstance(m, nn.BatchNorm3d):
+                init.constant_(m.weight, 1)
+                init.constant_(m.bias.data, 0.0)
 
 def flow_warp(x, flow, interp_mode='bilinear', padding_mode='zeros'):
     """Warp an image or feature map with optical flow

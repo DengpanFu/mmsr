@@ -221,7 +221,11 @@ class UPVideoModel(VideoBaseModel):
     def test(self):
         self.netG.eval()
         with torch.no_grad():
-            self.fake_H = self.netG(self.var_L, self.scale)
+            if self.opt['network_G']['which_model_G'] == 'EDVR3D':
+                self.fake_H = self.netG(self.var_L.transpose(1,2), self.scale)
+                self.fake_H = self.fake_H[:, :, 2, :, :]
+            else:
+                self.fake_H = self.netG(self.var_L, self.scale)
         self.netG.train()
 
 class MetaVideoModel(VideoBaseModel):

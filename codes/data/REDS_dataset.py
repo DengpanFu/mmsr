@@ -259,6 +259,142 @@ class REDSImgDataset(data.Dataset):
     def __len__(self):
         return len(self.paths_GT)
 
+class REDSMultiImgDataset(data.Dataset):
+    def __init__(self, opt):
+        super(REDSMultiImgDataset, self).__init__()
+        self.opt = opt
+        self.nframes = opt['N_frames']
+        self.interval_list = opt['interval_list']
+        self.random_reverse = opt['random_reverse']
+        logger.info('Temporal augmentation interval list: [{}], with random reverse is {}.'.format(
+            ','.join(str(x) for x in opt['interval_list']), self.random_reverse))
+        self.half_N_frames = opt['N_frames'] // 2
+
+        self.GT_root, self.LQ_root = opt['dataroot_GT'], opt['dataroot_LQ']
+        self.data_type = self.opt['data_type']
+        self.scale = opt['scale']
+        self.GT_size = self.opt['GT_size']
+        self.LQ_size = int(self.GT_size / self.scale)
+
+        if self.data_type == 'lmdb':
+            self.paths_GT, self.GT_size_tuple = util.get_image_paths(
+                                self.data_type, self.GT_root)
+            logger.info('Using lmdb meta info for cache keys.')
+            self.paths_GT = [v for v in self.paths_GT if v.split('_')[0] not in \
+                            ['000', '011', '015', '020']]
+            self.LQ_size_tuple = [self.GT_size_tuple[0], int(self.GT_size_tuple[1] \
+                            / self.scale), int(self.GT_size_tuple[2] / self.scale)]
+        else:
+            seqs = sorted(os.listdir(self.GT_root))
+            self.paths_GT = []
+            for seq in seqs:
+                if not seq in ['000', '011', '015', '020']:
+                    names = os.listdir(osp.join(self.GT_root, seq))
+                    self.paths_GT.extend([seq + '_' + x[:-4] for x in names])
+        assert self.paths_GT, 'Error: GT path is empty.'
+
+        if self.data_type == 'lmdb':
+            self.GT_env, self.LQ_env = None, None
+
+    def _init_lmdb(self):
+        # https://github.com/chainer/chainermn/issues/129
+        self.GT_env = lmdb.open(self.GT_root, readonly=True, lock=False, 
+                                readahead=False, meminit=False)
+        self.LQ_env = lmdb.open(self.LQ_root, readonly=True, lock=False, 
+                                readahead=False, meminit=False)
+
+    def get_neighbor_list(self, center_frame_idx):
+        #### determine the neighbor frames
+        interval = random.choice(self.interval_list)
+        if self.opt['border_mode']:
+            direction = 1  # 1: forward; 0: backward
+            N_frames = self.opt['N_frames']
+            if self.random_reverse and random.random() < 0.5:
+                direction = random.choice([0, 1])
+            if center_frame_idx + interval * (N_frames - 1) > 99:
+                direction = 0
+            elif center_frame_idx - interval * (N_frames - 1) < 0:
+                direction = 1
+            # get the neighbor list
+            if direction == 1:
+                neighbor_list = list(
+                    range(center_frame_idx, center_frame_idx + interval * N_frames, interval))
+            else:
+                neighbor_list = list(
+                    range(center_frame_idx, center_frame_idx - interval * N_frames, -interval))
+            name_b = '{:08d}'.format(neighbor_list[0])
+        else:
+            # ensure not exceeding the borders
+            while (center_frame_idx + self.half_N_frames * interval >
+                   99) or (center_frame_idx - self.half_N_frames * interval < 0):
+                center_frame_idx = random.randint(0, 99)
+            # get the neighbor list
+            neighbor_list = list(
+                range(center_frame_idx - self.half_N_frames * interval,
+                      center_frame_idx + self.half_N_frames * interval + 1, interval))
+            if self.random_reverse and random.random() < 0.5:
+                neighbor_list.reverse()
+            name_b = '{:08d}'.format(neighbor_list[self.half_N_frames])
+
+        assert len(
+            neighbor_list) == self.opt['N_frames'], 'Wrong length of neighbor list: {}'.format(
+                len(neighbor_list))
+        return neighbor_list, name_b
+
+    def read_imgs(self, keys, is_gt=False):
+        imgs = []
+        if self.data_type == 'lmdb':
+            env = self.GT_env if is_gt else self.LQ_env
+            sizes = self.GT_size_tuple if is_gt else self.LQ_size_tuple
+            for key in keys:
+                imgs.append(util.read_img(env, key, sizes))
+        else:
+            data_root = self.GT_root if is_gt else self.LQ_root
+            name_a, name_b = key.split('_')
+            im_path = osp.join(data_root, name_a, name_b + '.png')
+            imgs.append(util.read_img(None, path))
+        return imgs
+
+    def __getitem__(self, index):
+        if self.data_type == 'lmdb' and self.GT_env is None:
+            self._init_lmdb()
+
+        key = self.paths_GT[index]
+        name_a, name_b = key.split('_')
+        center_frame_idx = int(name_b)
+        neighbors, name_b = self.get_neighbor_list(center_frame_idx)
+        key = name_a + "_" + name_b
+        keys = [name_a + "_{:08d}".format(nei) for nei in neighbors]
+
+        img_GTs = self.read_imgs(keys, True)
+        img_LQs = self.read_imgs(keys, False)
+
+        if self.opt['phase'] == 'train':
+            H, W, _ = img_LQs[0].shape
+            rnd_h = random.randint(0, max(0, H - self.LQ_size))
+            rnd_w = random.randint(0, max(0, W - self.LQ_size))
+            img_LQs = [v[rnd_h : rnd_h + self.LQ_size, rnd_w : rnd_w + \
+                            self.LQ_size, :] for v in img_LQs]
+            rnd_h_HR, rnd_w_HR = int(rnd_h * self.scale), int(rnd_w * self.scale)
+            
+            img_GTs = [v[rnd_h_HR : rnd_h_HR + self.GT_size, rnd_w_HR : rnd_w_HR + \
+                            self.GT_size, :] for v in img_GTs]
+            # augmentation - flip, rotate
+            img_LQs += img_GTs
+            rlts = util.augment(img_LQs, self.opt['use_flip'], 
+                                    self.opt['use_rot'])
+            img_GTs = rlts[self.nframes:]
+            img_LQs = rlts[:self.nframes]
+        
+        # stack images to NHWC; BGR -> RGB; NHWC -> CNHW
+        img_GTs = np.stack(img_GTs, axis=0)[:, :, :, (2, 1, 0)].transpose((3, 0, 1, 2))
+        img_LQs = np.stack(img_LQs, axis=0)[:, :, :, (2, 1, 0)].transpose((3, 0, 1, 2))
+        img_GTs = torch.from_numpy(img_GTs).float()
+        img_LQs = torch.from_numpy(img_LQs).float()
+        return {'LQs': img_LQs, 'GT': img_GTs, 'key': key, 'scale': self.scale}
+
+    def __len__(self):
+        return len(self.paths_GT)
 
 
 class MultiREDSDataset(REDSDataset):

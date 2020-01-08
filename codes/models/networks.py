@@ -27,6 +27,9 @@ def define_G(opt):
     elif which_model == 'EDVRImg':
         netG = EDVR_arch.EDVRImage(nf=opt_net['nf'], front_RBs=opt_net['front_RBs'],
                                  back_RBs=opt_net['back_RBs'], down_scale=opt_net['down_scale'])
+    elif which_model == 'EDVR3D':
+        netG = EDVR_arch.EDVR3D(nf=opt_net['nf'], front_RBs=opt_net['front_RBs'],
+                                back_RBs=opt_net['back_RBs'], down_scale=opt_net['down_scale'])
     elif which_model == 'UPEDVR':
         netG = EDVR_arch.UPEDVR(nf=opt_net['nf'], nframes=opt_net['nframes'],
                                 groups=opt_net['groups'], front_RBs=opt_net['front_RBs'],

@@ -39,6 +39,8 @@ def create_dataset(dataset_opt):
         from data.REDS_dataset import REDSDataset as D
     elif mode == 'REDSImg':
         from data.REDS_dataset import REDSImgDataset as D
+    elif mode == 'REDSMultiImg':
+        from data.REDS_dataset import REDSMultiImgDataset as D
     elif mode == 'MultiREDS':
         from data.REDS_dataset import MultiREDSDataset as D
     elif mode == 'MetaREDS':

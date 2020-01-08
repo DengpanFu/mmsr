@@ -381,6 +381,73 @@ class EDVRImage(nn.Module):
         out += base
         return out
 
+class EDVR3D(nn.Module):
+    def __init__(self, nf=64, front_RBs=5, back_RBs=10, conv_type='normal', 
+        down_scale=True):
+        super(EDVR3D, self).__init__()
+        self.nf = nf
+        self.front_RBs = front_RBs
+        self.back_RBs = back_RBs
+        self.conv_type = conv_type
+        self.down_scale = down_scale
+        ResidualBlock_3D = functools.partial(arch_util.ResidualBlock_3D, 
+            planes=nf, conv_type=conv_type, padding_mode='const', has_bias=True)
+
+        #### extract features (for each frame)
+        if self.down_scale:
+            self.conv_first_1 = nn.Conv3d(3, nf, kernel_size=(3, 3, 3), 
+                        stride=(1, 1, 1), padding=(1, 1, 1), bias=True)
+            self.conv_first_2 = nn.Conv3d(nf, nf, kernel_size=(3, 3, 3), 
+                        stride=(1, 2, 2), padding=(1, 1, 1), bias=True)
+            self.conv_first_3 = nn.Conv3d(nf, nf, kernel_size=(3, 3, 3), 
+                        stride=(1, 2, 2), padding=(1, 1, 1), bias=True)
+        else:
+            self.conv_first = nn.Conv3d(3, nf, kernel_size=(3, 3, 3), 
+                        stride=(1, 1, 1), padding=(1, 1, 1), bias=True)
+        self.feature_extraction = arch_util.make_layer(ResidualBlock_3D, front_RBs)
+
+        #### reconstruction
+        self.recon_trunk = arch_util.make_layer(ResidualBlock_3D, back_RBs)
+        #### upsampling
+        self.upconv1 = nn.ConvTranspose3d(nf, nf, kernel_size=(3, 3, 3), 
+            stride=(1, 2, 2), padding=(1, 1, 1), output_padding=(0, 1, 1), bias=True)
+        self.upconv2 = nn.ConvTranspose3d(nf, 64, kernel_size=(3, 3, 3), 
+            stride=(1, 2, 2), padding=(1, 1, 1), output_padding=(0, 1, 1), bias=True)
+
+        self.HRconv = nn.Conv3d(64, 64, kernel_size=(3, 3, 3), 
+                        stride=(1, 1, 1), padding=(1, 1, 1), bias=True)
+        self.conv_last = nn.Conv3d(64, 3, kernel_size=(3, 3, 3), 
+                        stride=(1, 1, 1), padding=(1, 1, 1), bias=True)
+
+        #### activation function
+        self.lrelu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
+
+    def forward(self, x, scale):
+        N, C, T, H, W = x.size()
+        x = x.view(N, C*T, H, W)
+        x = F.interpolate(x, scale_factor=scale, mode='bilinear', 
+                                 align_corners=False)
+        H, W = x.shape[-2:]
+        x = x.view(N, C, T, H, W)
+        base = x.detach()
+        if self.down_scale:
+            feat = self.lrelu(self.conv_first_1(x))
+            feat = self.lrelu(self.conv_first_2(feat))
+            feat = self.lrelu(self.conv_first_3(feat))
+            # H, W = H // 4, W // 4
+        else:
+            feat = self.lrelu(self.conv_first(x))
+        feat = self.feature_extraction(feat)
+
+        out = self.recon_trunk(feat)
+        out = self.lrelu(self.upconv1(out))
+        out = self.lrelu(self.upconv2(out))
+        out = self.lrelu(self.HRconv(out))
+        out = self.conv_last(out)
+        out += base
+        return out
+
+
 
 class UPEDVR(nn.Module):
     def __init__(self, nf=64, nframes=5, groups=8, front_RBs=5, back_RBs=10, 
