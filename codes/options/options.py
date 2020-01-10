@@ -25,11 +25,15 @@ def parse(opt_path, opt_list=None, is_train=True):
         opt['scale'] = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, \
                         2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, \
                         3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0]
+
     if opt['scale'] == -5:
         opt['scale'] = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, \
                         2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, \
                         3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, \
                         4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 5.0 ]
+    if isinstance(opt['scale'], (list, tuple)) and len(opt['scale']) > 0:
+        # opt['scale'] = refine_scales(opt['scale'])
+        refine_scales(opt)
 
     if opt['distortion'] == 'sr':
         scale = opt['scale']
@@ -150,6 +154,23 @@ def parse(opt_path, opt_list=None, is_train=True):
 def set_default_opt(opt, key, value):
     if not key in opt:
         opt[key] = value
+
+def refine_scales(scales, out_size=256):
+    fx = lambda x: float("{:.3f}".format(x))
+    step = fx(1 / out_size)
+    new_scales = []
+    for scale in scales:
+        sample_size = int(np.round(out_size / scale))
+        tmp_scale = fx(out_size / sample_size)
+        tmp_size = int(sample_size * tmp_scale)
+        while tmp_size > out_size:
+            tmp_scale = fx(tmp_scale - step)
+            tmp_size = int(sample_size * tmp_scale)
+        while tmp_size < out_size:
+            tmp_scale = fx(tmp_scale + step)
+            tmp_size = int(sample_size * tmp_scale)
+        new_scales.append(tmp_scale)
+    return new_scales
 
 def opt_from_list(opt, opt_list):
     from ast import literal_eval
