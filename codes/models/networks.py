@@ -42,7 +42,8 @@ def define_G(opt):
                                        groups=opt_net['groups'], front_RBs=opt_net['front_RBs'],
                                        back_RBs=opt_net['back_RBs'], center=opt_net['center'],
                                        w_TSA=opt_net['w_TSA'], down_scale=opt_net['down_scale'], 
-                                       align_target=opt_net['align_target'])
+                                       align_target=opt_net['align_target'], 
+                                       ret_valid=opt_net['ret_valid'])
     # video SR for multiple target frames
     elif which_model == 'MultiEDVR':
         netG = EDVR_arch.MultiEDVR(nf=opt_net['nf'], nframes=opt_net['nframes'],

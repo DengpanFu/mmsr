@@ -61,7 +61,6 @@ class Predeblur_ResNet_Pyramid(nn.Module):
         out = self.RB_L1_5(self.RB_L1_4(self.RB_L1_3(L1_fea)))
         return out
 
-
 class PCD_Align(nn.Module):
     ''' Alignment module using Pyramid, Cascading and Deformable convolution
     with 3 pyramid levels.
@@ -142,7 +141,6 @@ class PCD_Align(nn.Module):
 
         return L1_fea
 
-
 class PCD_Align_Valid(nn.Module):
     ''' Alignment module using Pyramid, Cascading and Deformable convolution
     with 3 pyramid levels.
@@ -214,8 +212,6 @@ class PCD_Align_Valid(nn.Module):
         L1_fea = self.lrelu(L1_fea)
         valid = valid3 & valid2 & valid1 & valid0
         return L1_fea, valid
-
-
 
 class TSA_Fusion(nn.Module):
     ''' Temporal Spatial Attention fusion module
@@ -290,7 +286,6 @@ class TSA_Fusion(nn.Module):
 
         fea = fea * att * 2 + att_add
         return fea
-
 
 class EDVR(nn.Module):
     def __init__(self, nf=64, nframes=5, groups=8, front_RBs=5, back_RBs=10, center=None,
@@ -520,7 +515,6 @@ class EDVR3D(nn.Module):
         out = self.conv_last(out)
         out += base
         return out
-
 
 class UPEDVR(nn.Module):
     def __init__(self, nf=64, nframes=5, groups=8, front_RBs=5, back_RBs=10, 
@@ -790,7 +784,6 @@ class UPEDVRV1(nn.Module):
         out += x_center
         return out
 
-
 class Scale2Weight(nn.Module):
     def __init__(self, kernel_size=3, inC=64, outC=64, dims=[8]):
         super(Scale2Weight,self).__init__()
@@ -816,7 +809,7 @@ class Scale2Weight(nn.Module):
 
 class UPControlEDVR(nn.Module):
     def __init__(self, nf=64, nframes=5, groups=8, front_RBs=5, back_RBs=10, 
-        center=None, w_TSA=True, down_scale=True, align_target=True):
+        center=None, w_TSA=True, down_scale=True, align_target=True, ret_valid=False):
         super(UPControlEDVR, self).__init__()
         self.nf = nf
         self.nframes = nframes
@@ -824,6 +817,7 @@ class UPControlEDVR(nn.Module):
         self.w_TSA = w_TSA
         self.down_scale = down_scale
         self.align_target = align_target
+        self.ret_valid = ret_valid
         ResidualBlock_noBN_f = functools.partial(arch_util.ResidualBlock_noBN, nf=nf)
 
         #### extract features (for each frame)
@@ -840,7 +834,11 @@ class UPControlEDVR(nn.Module):
         self.fea_L3_conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
 
         self.control_conv = Scale2Weight(kernel_size=3, inC=nf, outC=nf)
-        self.pcd_align = PCD_Align(nf=nf, groups=groups)
+
+        if self.ret_valid:
+            self.pcd_align = PCD_Align_Valid(nf=nf, groups=groups)
+        else:
+            self.pcd_align = PCD_Align(nf=nf, groups=groups)
 
         if self.w_TSA:
             self.tsa_fusion = TSA_Fusion(nf=nf, nframes=nframes, center=self.center)
@@ -902,13 +900,25 @@ class UPControlEDVR(nn.Module):
                      L2_fea[:, self.center, :, :, :].clone(),
                      L3_fea[:, self.center, :, :, :].clone()]
                   # [(B,64,64,64), (B,64,32,32), (B,64,16,16)]
-        aligned_fea = []
-        for i in range(N):
-            if not self.align_target and (i == self.center): continue
-            nbr_fea_l = [L1_fea[:, i, :, :, :].clone(), 
-                         L2_fea[:, i, :, :, :].clone(),
-                         L3_fea[:, i, :, :, :].clone()]
-            aligned_fea.append(self.pcd_align(nbr_fea_l, ref_fea_l)) 
+        if self.ret_valid:
+            aligned_fea, valids = [], []
+            for i in range(N):
+                if not self.align_target and (i == self.center): continue
+                nbr_fea_l = [L1_fea[:, i, :, :, :].clone(), 
+                             L2_fea[:, i, :, :, :].clone(),
+                             L3_fea[:, i, :, :, :].clone()]
+                feat, valid = self.pcd_align(nbr_fea_l, ref_fea_l)
+                aligned_fea.append(feat)
+                valids.append(valid)
+        else:
+            aligned_fea = []
+            for i in range(N):
+                if not self.align_target and (i == self.center): continue
+                nbr_fea_l = [L1_fea[:, i, :, :, :].clone(), 
+                             L2_fea[:, i, :, :, :].clone(),
+                             L3_fea[:, i, :, :, :].clone()]
+                feat = self.pcd_align(nbr_fea_l, ref_fea_l)
+                aligned_fea.append(feat)
         aligned_fea = torch.stack(aligned_fea, dim=1)
 
         if not self.w_TSA:
@@ -926,7 +936,10 @@ class UPControlEDVR(nn.Module):
         out = self.lrelu(self.HRconv(out))
         out = self.conv_last(out)
         out += x_center
-        return out
+        if self.ret_valid:
+            return out, valid
+        else:
+            return out
 
 
 class MultiEDVR(nn.Module):
