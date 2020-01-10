@@ -256,10 +256,11 @@ class ModulatedDeformConv(nn.Module):
 
 
 class ModulatedDeformConvPack(ModulatedDeformConv):
-    def __init__(self, *args, extra_offset_mask=False, **kwargs):
+    def __init__(self, *args, extra_offset_mask=False, return_valid=False, **kwargs):
         super(ModulatedDeformConvPack, self).__init__(*args, **kwargs)
 
         self.extra_offset_mask = extra_offset_mask
+        self.return_valid = return_valid
         self.conv_offset_mask = nn.Conv2d(
             self.in_channels,
             self.deformable_groups * 3 * self.kernel_size[0] * self.kernel_size[1],
@@ -283,9 +284,17 @@ class ModulatedDeformConvPack(ModulatedDeformConv):
         mask = torch.sigmoid(mask)
 
         offset_mean = torch.mean(torch.abs(offset))
+        valid = True
         if offset_mean > 100:
-            logger.warning('Offset mean is {}, larger than 100.'.format(offset_mean))
+            if not self.return_valid:
+                logger.warning('Offset mean is {}, larger than 100.'.format(offset_mean))
+            valid = False
 
-        return modulated_deform_conv(x, offset, mask, self.weight, self.bias, self.stride,
+        if self.return_valid:
+            return modulated_deform_conv(x, offset, mask, self.weight, self.bias, self.stride,
+                                     self.padding, self.dilation, self.groups,
+                                     self.deformable_groups), valid
+        else:
+            return modulated_deform_conv(x, offset, mask, self.weight, self.bias, self.stride,
                                      self.padding, self.dilation, self.groups,
                                      self.deformable_groups)

@@ -143,6 +143,80 @@ class PCD_Align(nn.Module):
         return L1_fea
 
 
+class PCD_Align_Valid(nn.Module):
+    ''' Alignment module using Pyramid, Cascading and Deformable convolution
+    with 3 pyramid levels.
+    '''
+
+    def __init__(self, nf=64, groups=8):
+        super(PCD_Align_Valid, self).__init__()
+        # L3: level 3, 1/4 spatial size
+        self.L3_offset_conv1 = nn.Conv2d(nf * 2, nf, 3, 1, 1, bias=True)  # concat for diff
+        self.L3_offset_conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+        self.L3_dcnpack = DCN(nf, nf, 3, stride=1, padding=1, dilation=1, deformable_groups=groups,
+                              extra_offset_mask=True, return_valid=True)
+        # L2: level 2, 1/2 spatial size
+        self.L2_offset_conv1 = nn.Conv2d(nf * 2, nf, 3, 1, 1, bias=True)  # concat for diff
+        self.L2_offset_conv2 = nn.Conv2d(nf * 2, nf, 3, 1, 1, bias=True)  # concat for offset
+        self.L2_offset_conv3 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+        self.L2_dcnpack = DCN(nf, nf, 3, stride=1, padding=1, dilation=1, deformable_groups=groups,
+                              extra_offset_mask=True, return_valid=True)
+        self.L2_fea_conv = nn.Conv2d(nf * 2, nf, 3, 1, 1, bias=True)  # concat for fea
+        # L1: level 1, original spatial size
+        self.L1_offset_conv1 = nn.Conv2d(nf * 2, nf, 3, 1, 1, bias=True)  # concat for diff
+        self.L1_offset_conv2 = nn.Conv2d(nf * 2, nf, 3, 1, 1, bias=True)  # concat for offset
+        self.L1_offset_conv3 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+        self.L1_dcnpack = DCN(nf, nf, 3, stride=1, padding=1, dilation=1, deformable_groups=groups,
+                              extra_offset_mask=True, return_valid=True)
+        self.L1_fea_conv = nn.Conv2d(nf * 2, nf, 3, 1, 1, bias=True)  # concat for fea
+        # Cascading DCN
+        self.cas_offset_conv1 = nn.Conv2d(nf * 2, nf, 3, 1, 1, bias=True)  # concat for diff
+        self.cas_offset_conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+
+        self.cas_dcnpack = DCN(nf, nf, 3, stride=1, padding=1, dilation=1, deformable_groups=groups,
+                               extra_offset_mask=True, return_valid=True)
+
+        self.lrelu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
+
+    def forward(self, nbr_fea_l, ref_fea_l):
+        '''align other neighboring frames to the reference frame in the feature level
+        nbr_fea_l, ref_fea_l: [L1, L2, L3], each with [B,C,H,W] features
+        '''
+        # L3
+        L3_offset = torch.cat([nbr_fea_l[2], ref_fea_l[2]], dim=1)
+        L3_offset = self.lrelu(self.L3_offset_conv1(L3_offset))
+        L3_offset = self.lrelu(self.L3_offset_conv2(L3_offset))
+        L3_offset, valid3 = self.L3_dcnpack([nbr_fea_l[2], L3_offset])
+        L3_fea = self.lrelu(L3_offset)
+        # L2
+        L2_offset = torch.cat([nbr_fea_l[1], ref_fea_l[1]], dim=1)
+        L2_offset = self.lrelu(self.L2_offset_conv1(L2_offset))
+        L3_offset = F.interpolate(L3_offset, scale_factor=2, mode='bilinear', align_corners=False)
+        L2_offset = self.lrelu(self.L2_offset_conv2(torch.cat([L2_offset, L3_offset * 2], dim=1)))
+        L2_offset = self.lrelu(self.L2_offset_conv3(L2_offset))
+        L2_fea, valid2 = self.L2_dcnpack([nbr_fea_l[1], L2_offset])
+        L3_fea = F.interpolate(L3_fea, scale_factor=2, mode='bilinear', align_corners=False)
+        L2_fea = self.lrelu(self.L2_fea_conv(torch.cat([L2_fea, L3_fea], dim=1)))
+        # L1
+        L1_offset = torch.cat([nbr_fea_l[0], ref_fea_l[0]], dim=1)
+        L1_offset = self.lrelu(self.L1_offset_conv1(L1_offset))
+        L2_offset = F.interpolate(L2_offset, scale_factor=2, mode='bilinear', align_corners=False)
+        L1_offset = self.lrelu(self.L1_offset_conv2(torch.cat([L1_offset, L2_offset * 2], dim=1)))
+        L1_offset = self.lrelu(self.L1_offset_conv3(L1_offset))
+        L1_fea, valid1 = self.L1_dcnpack([nbr_fea_l[0], L1_offset])
+        L2_fea = F.interpolate(L2_fea, scale_factor=2, mode='bilinear', align_corners=False)
+        L1_fea = self.L1_fea_conv(torch.cat([L1_fea, L2_fea], dim=1))
+        # Cascading
+        offset = torch.cat([L1_fea, ref_fea_l[0]], dim=1)
+        offset = self.lrelu(self.cas_offset_conv1(offset))
+        offset = self.lrelu(self.cas_offset_conv2(offset))
+        L1_fea, valid0 = self.cas_dcnpack([L1_fea, offset])
+        L1_fea = self.lrelu(L1_fea)
+        valid = valid3 & valid2 & valid1 & valid0
+        return L1_fea, valid
+
+
+
 class TSA_Fusion(nn.Module):
     ''' Temporal Spatial Attention fusion module
     Temporal: correlation;
@@ -448,10 +522,9 @@ class EDVR3D(nn.Module):
         return out
 
 
-
 class UPEDVR(nn.Module):
     def __init__(self, nf=64, nframes=5, groups=8, front_RBs=5, back_RBs=10, 
-        center=None, w_TSA=True, down_scale=False, align_target=True):
+        center=None, w_TSA=True, down_scale=False, align_target=True, ret_valid=False):
         super(UPEDVR, self).__init__()
         self.nf = nf
         self.nframes = nframes
@@ -459,6 +532,7 @@ class UPEDVR(nn.Module):
         self.w_TSA = w_TSA
         self.down_scale = down_scale
         self.align_target = align_target
+        self.ret_valid = ret_valid
         ResidualBlock_noBN_f = functools.partial(arch_util.ResidualBlock_noBN, nf=nf)
 
         #### extract features (for each frame)
@@ -473,8 +547,10 @@ class UPEDVR(nn.Module):
         self.fea_L2_conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
         self.fea_L3_conv1 = nn.Conv2d(nf, nf, 3, 2, 1, bias=True)
         self.fea_L3_conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
-
-        self.pcd_align = PCD_Align(nf=nf, groups=groups)
+        if self.ret_valid:
+            self.pcd_align = PCD_Align_Valid(nf=nf, groups=groups)
+        else:
+            self.pcd_align = PCD_Align(nf=nf, groups=groups)
         if self.w_TSA:
             if self.align_target:
                 self.tsa_fusion = TSA_Fusion(nf=nf, nframes=nframes, center=self.center)
@@ -532,14 +608,25 @@ class UPEDVR(nn.Module):
                      L2_fea[:, self.center, :, :, :].clone(),
                      L3_fea[:, self.center, :, :, :].clone()]  
                    # [(B,64,64,64), (B,64,32,32), (B,64,16,16)]
-        aligned_fea = []
-        for i in range(N):
-            if not self.align_target and (i == self.center): continue
-            nbr_fea_l = [L1_fea[:, i, :, :, :].clone(), 
-                         L2_fea[:, i, :, :, :].clone(),
-                         L3_fea[:, i, :, :, :].clone()]
-            aligned_fea.append(self.pcd_align(nbr_fea_l, ref_fea_l))  
-            # N-1,(B,64,64,64)
+        if self.ret_valid:
+            aligned_fea, valids = [], []
+            for i in range(N):
+                if not self.align_target and (i == self.center): continue
+                nbr_fea_l = [L1_fea[:, i, :, :, :].clone(), 
+                             L2_fea[:, i, :, :, :].clone(),
+                             L3_fea[:, i, :, :, :].clone()]
+                feat, valid = self.pcd_align(nbr_fea_l, ref_fea_l)
+                aligned_fea.append(feat)
+                valids.append(valid)
+        else:
+            aligned_fea = []
+            for i in range(N):
+                if not self.align_target and (i == self.center): continue
+                nbr_fea_l = [L1_fea[:, i, :, :, :].clone(), 
+                             L2_fea[:, i, :, :, :].clone(),
+                             L3_fea[:, i, :, :, :].clone()]
+                feat = self.pcd_align(nbr_fea_l, ref_fea_l)
+                aligned_fea.append(feat)
         aligned_fea = torch.stack(aligned_fea, dim=1)  # [B, N-1, C, H, W]
 
         if not self.w_TSA:
@@ -552,7 +639,10 @@ class UPEDVR(nn.Module):
         out = self.lrelu(self.HRconv(out))    # B,C,256,256
         out = self.conv_last(out)    # B,3,256,256
         out += x_center
-        return out
+        if self.ret_valid:
+            return out, valid
+        else:
+            return out
 
 class UPEDVRV1(nn.Module):
     def __init__(self, nf=64, nframes=5, groups=8, front_RBs=5, back_RBs=10, 

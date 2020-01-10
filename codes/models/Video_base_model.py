@@ -195,7 +195,56 @@ class VideoBaseModel(BaseModel):
 
 class UPVideoModel(VideoBaseModel):
     def __init__(self, opt):
+        self.ret_valid = opt['network_G']['ret_valid']
+        self.deform_lr_mult = opt['network_G']['deform_lr_mult']
         super(UPVideoModel, self).__init__(opt)
+        self.invalid_cnt = 0
+        if self.rank <= 0:
+            logger.info('Optimize deform_conv offset params with lr_mult: {}'.
+                format(self.deform_lr_mult))
+            if self.ret_valid:
+                logger.info('Fliter out the deform conv offset mean > 100')
+
+    def get_optimizer(self, net, opt):
+        wd = opt['weight_decay_G'] if opt['weight_decay_G'] else 0
+        beta1 = opt['beta1'] if opt['beta1'] else 0.9
+        beta2 = opt['beta2'] if opt['beta2'] else 0.99
+        if opt['ft_tsa_only']:
+            normal_params, tsa_fusion_params, deform_params = [], [], []
+            for k, v in net.named_parameters():
+                if v.requires_grad:
+                    if 'tsa_fusion' in k:
+                        tsa_fusion_params.append(v)
+                    elif 'conv_offset_mask' in k:
+                        deform_params.append(v)
+                    else:
+                        normal_params.append(v)
+                else:
+                    if self.rank <= 0:
+                        logger.warning('Params [{:s}] will not optimize.'.format(k))
+            optim_params = [{'params': normal_params, 'lr': opt['lr_G'], 'name': 'normal'}, 
+                            {'params': tsa_fusion_params, 'lr': opt['lr_G'], 'name': 'tsa'}, 
+                            {'params': deform_params, 'name': 'deform_offset_params', 
+                                    'lr': opt['lr_G'] * self.deform_lr_mult}]
+        else:
+            normal_params, deform_params = [], []
+            optim_params = []
+            for k, v in net.named_parameters():
+                if v.requires_grad:
+                    if 'conv_offset_mask' in k:
+                        deform_params.append(v)
+                    else:
+                        normal_params.append(v)
+                else:
+                    if self.rank <= 0:
+                        logger.warning('Params [{:s}] will not optimize.'.format(k))
+            optim_params = [{'params': normal_params, 'lr': opt['lr_G'], 'name': 'normal'}, 
+                            {'params': deform_params, 'name': 'deform_offset_params', 
+                                    'lr': opt['lr_G'] * self.deform_lr_mult}]
+
+        optimizer = torch.optim.Adam(optim_params, lr=opt['lr_G'], weight_decay=wd,
+                                     betas=(beta1, beta2))
+        return optimizer
 
     def feed_data(self, data, need_GT=True):
         self.var_L = data['LQs'].to(self.device)
@@ -209,7 +258,13 @@ class UPVideoModel(VideoBaseModel):
 
     def optimize_parameters(self, step):
         self.optimizer_G.zero_grad()
-        self.fake_H = self.netG(self.var_L, self.scale)
+        if self.ret_valid:
+            self.fake_H, valid = self.netG(self.var_L, self.scale)
+            if not valid:
+                self.invalid_cnt += 1
+                return None
+        else:
+            self.fake_H = self.netG(self.var_L, self.scale)
 
         l_pix = self.l_pix_w * self.cri_pix(self.fake_H, self.real_H)
         l_pix.backward()
@@ -217,6 +272,7 @@ class UPVideoModel(VideoBaseModel):
 
         # set log
         self.log_dict['l_pix'] = l_pix.item()
+        self.log_dict['inval_cnt'] = self.invalid_cnt
 
     def test(self):
         self.netG.eval()
@@ -226,6 +282,8 @@ class UPVideoModel(VideoBaseModel):
                 self.fake_H = self.fake_H[:, :, 2, :, :]
             else:
                 self.fake_H = self.netG(self.var_L, self.scale)
+                if self.ret_valid:
+                    self.fake_H = self.fake_H[0]
         self.netG.train()
 
 class MetaVideoModel(VideoBaseModel):

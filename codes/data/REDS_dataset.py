@@ -8,6 +8,7 @@ import pickle
 import logging
 import numpy as np
 import cv2
+from PIL import Image
 import lmdb
 import torch
 import torch.utils.data as data
@@ -484,8 +485,9 @@ class UPREDSDataset(data.Dataset):
         self.scales = self.opt['scale']
         assert(len(self.scales) >= 1)
         self.GT_size = self.opt['GT_size']
-        self.scales, self.LQ_sizes = self.refine_scales()
-        opt['scale'] = self.scales
+        self.LQ_sizes = self.opt['LQ_size']
+        # self.scales, self.LQ_sizes = self.refine_scales()
+        # opt['scale'] = self.scales
 
     def refine_scales(self):
         # def convert_scales(scales, out_size=256):
@@ -511,7 +513,7 @@ class UPREDSDataset(data.Dataset):
         self.GT_env = lmdb.open(self.opt['dataroot_GT'], readonly=True, lock=False, 
                         readahead=False, meminit=False)
 
-    def read_imgs(self, root_dir, name_a, name_b, scale=None):
+    def read_imgs_v0(self, root_dir, name_a, name_b, scale=None):
         if scale is None:
             if self.data_type == 'lmdb':
                 paths = [name_a + '_' + name_b]
@@ -542,6 +544,27 @@ class UPREDSDataset(data.Dataset):
                     img = util.read_img_to_LR(None, path, None, scale)
             imgs.append(img)
         return imgs
+
+    def read_imgs(self, root_dir, name_a, name_bs):
+        assert(len(name_bs) > 1)
+        imgs = []
+        if self.data_type == 'lmdb':
+            for name in name_bs:
+                if not isinstance(name, str):
+                    name = "{:08d}".format(name)
+                path = name_a + '_' + name
+                imgs.append(util.read_img(self.GT_env, path, self.GT_size_tuple, dtype='uint8'))
+        else:
+            for name in name_bs:
+                if not isinstance(name, str):
+                    name = "{:08d}".format(name)
+                path = osp.join(root_dir, name_a, name + '.png')
+                imgs.append(util.read_img(None, path, dtype='uint8'))
+        # img_GT = imgs[self.half_N_frames]
+        # img_LQs = [np.array(Image.fromarray(img).resize((LQ_size, LQ_size), 
+        #                 Image.BICUBIC)) for img in imgs]
+        return np.stack(imgs)
+
 
     def get_neighbor_list(self, center_frame_idx):
         #### determine the neighbor frames
@@ -596,17 +619,18 @@ class UPREDSDataset(data.Dataset):
         neighbor_list, name_b = self.get_neighbor_list(center_frame_idx)
 
         #### get the images
-        img_GT = self.read_imgs(self.GT_root, name_a, name_b)[0]
-        img_LQs = self.read_imgs(self.GT_root, name_a, neighbor_list, scale)
+        # img_GT = self.read_imgs_v0(self.GT_root, name_a, name_b)[0]
+        # img_LQs = self.read_imgs_v0(self.GT_root, name_a, neighbor_list, scale)
+        imgs = self.read_imgs(self.GT_root, name_a, neighbor_list)
 
         if self.opt['phase'] == 'train':
-            H, W, _ = img_LQs[0].shape
-            rnd_h = random.randint(0, max(0, H - LQ_size))
-            rnd_w = random.randint(0, max(0, W - LQ_size))
-            img_LQs = [v[rnd_h:rnd_h + LQ_size, rnd_w:rnd_w + LQ_size, :] for v in img_LQs]
-            rnd_h_HR, rnd_w_HR = int(rnd_h * scale), int(rnd_w * scale)
-            GT_size = int(LQ_size * scale)
-            img_GT = img_GT[rnd_h_HR:rnd_h_HR + GT_size, rnd_w_HR:rnd_w_HR + GT_size, :]
+            _, H, W, _ = imgs.shape
+            rnd_h = random.randint(0, max(0, H - self.GT_size))
+            rnd_w = random.randint(0, max(0, W - self.GT_size))
+            imgs = imgs[:, rnd_h : rnd_h + self.GT_size, rnd_w : rnd_w + self.GT_size, :]
+            img_GT = imgs[self.half_N_frames] / 255.
+            img_LQs = [np.array(Image.fromarray(img).resize((LQ_size, LQ_size), 
+                        Image.BICUBIC)) / 255. for img in imgs]
             # augmentation - flip, rotate
             img_LQs.append(img_GT)
             rlt = util.augment(img_LQs, self.opt['use_flip'], self.opt['use_rot'])

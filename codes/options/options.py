@@ -21,18 +21,9 @@ def parse(opt_path, opt_list=None, is_train=True):
     set_default_opt(opt['train'], 'reduction', 'sum')
     set_default_opt(opt['train'], 'fix_edvr', False)
 
-    if opt['scale'] == -4 or opt['scale'] == -1:
-        opt['scale'] = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, \
-                        2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, \
-                        3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0]
-
-    if opt['scale'] == -5:
-        opt['scale'] = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, \
-                        2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, \
-                        3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, \
-                        4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 5.0 ]
+    if isinstance(opt['scale'], (int, float)) and opt['scale'] < -1:
+        opt['scale'] = format_float(np.arange(1.1, -opt['scale']+ 0.05, 0.1).tolist())
     if isinstance(opt['scale'], (list, tuple)) and len(opt['scale']) > 0:
-        # opt['scale'] = refine_scales(opt['scale'])
         refine_scales(opt)
 
     if opt['distortion'] == 'sr':
@@ -103,6 +94,8 @@ def parse(opt_path, opt_list=None, is_train=True):
     set_default_opt(opt['network_G'], 'predeblur', False)
     set_default_opt(opt['network_G'], 'HR_in', False)
     set_default_opt(opt['network_G'], 'w_TSA', False)
+    set_default_opt(opt['network_G'], 'ret_valid', False)
+    set_default_opt(opt['network_G'], 'deform_lr_mult', 1.)
     # set some default network config for network D
     if 'network_D' in opt:
         set_default_opt(opt['network_D'], 'which_model_D', 'DCN3D')
@@ -155,22 +148,32 @@ def set_default_opt(opt, key, value):
     if not key in opt:
         opt[key] = value
 
-def refine_scales(scales, out_size=256):
-    fx = lambda x: float("{:.3f}".format(x))
-    step = fx(1 / out_size)
-    new_scales = []
-    for scale in scales:
+def format_float(input, prec=1):
+    format_str = lambda x: float("{:.{:d}f}".format(x, prec))
+    if isinstance(input, (list, tuple)):
+        return [format_str(x) for x in input]
+    else:
+        return format_str(input)
+
+def refine_scales(opt):
+    out_size = opt['datasets']['train'].get('GT_size', None)
+    if out_size is None: out_size = 256
+    step = format_float(0.5 / out_size, 3)
+    new_scales, sample_sizes = [], []
+    for scale in opt['scale']:
         sample_size = int(np.round(out_size / scale))
-        tmp_scale = fx(out_size / sample_size)
+        tmp_scale = format_float(out_size / sample_size, 3)
         tmp_size = int(sample_size * tmp_scale)
         while tmp_size > out_size:
-            tmp_scale = fx(tmp_scale - step)
+            tmp_scale = format_float(tmp_scale - step, 3)
             tmp_size = int(sample_size * tmp_scale)
         while tmp_size < out_size:
-            tmp_scale = fx(tmp_scale + step)
+            tmp_scale = format_float(tmp_scale + step, 3)
             tmp_size = int(sample_size * tmp_scale)
         new_scales.append(tmp_scale)
-    return new_scales
+        sample_sizes.append(sample_size)
+    opt['scale'] = new_scales
+    opt['datasets']['train']['LQ_size'] = sample_sizes
 
 def opt_from_list(opt, opt_list):
     from ast import literal_eval
