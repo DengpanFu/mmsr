@@ -202,10 +202,11 @@ def main():
                     message += '{:.3e},'.format(v)
                 message += ')] '
                 for k, v in logs.items():
-                    message += '{:s}: {:.4e} '.format(k, v)
+                    if v is not None:
+                        message += '{:s}: {:.4e} '.format(k, v)
                     # tensorboard logger
                     if opt['use_tb_logger'] and 'debug' not in opt['name']:
-                        if rank <= 0:
+                        if rank <= 0 and v is not None:
                             tb_logger.add_scalar(k, v, current_step)
                 if rank <= 0:
                     logger.info(message)

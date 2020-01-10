@@ -262,6 +262,8 @@ class UPVideoModel(VideoBaseModel):
             self.fake_H, valid = self.netG(self.var_L, self.scale)
             if not valid:
                 self.invalid_cnt += 1
+                self.log_dict['l_pix'] = None
+                self.log_dict['inval_cnt'] = self.invalid_cnt
                 return None
         else:
             self.fake_H = self.netG(self.var_L, self.scale)
