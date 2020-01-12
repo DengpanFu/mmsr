@@ -6,14 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import models.archs.arch_util as arch_util
 
-try:
-    from dcn.deform_conv import ModulatedDeformConvPack as DCN
-except Exception as exc:
-    try:
-        from models.archs.dcn.deform_conv import ModulatedDeformConvPack as DCN
-    except Exception as exc:
-        raise ImportError('Failed to import DCNv2 module.')
-
+from models.archs.dcn.deform_conv import ModulatedDeformConvPack as DCN
 
 class Predeblur_ResNet_Pyramid(nn.Module):
     def __init__(self, nf=128, HR_in=False):
@@ -809,7 +802,8 @@ class Scale2Weight(nn.Module):
 
 class UPControlEDVR(nn.Module):
     def __init__(self, nf=64, nframes=5, groups=8, front_RBs=5, back_RBs=10, 
-        center=None, w_TSA=True, down_scale=True, align_target=True, ret_valid=False):
+        center=None, w_TSA=True, down_scale=True, align_target=True, 
+        ret_valid=False, multi_scale_cont=False):
         super(UPControlEDVR, self).__init__()
         self.nf = nf
         self.nframes = nframes
@@ -818,6 +812,7 @@ class UPControlEDVR(nn.Module):
         self.down_scale = down_scale
         self.align_target = align_target
         self.ret_valid = ret_valid
+        self.multi_scale_cont = multi_scale_cont
         ResidualBlock_noBN_f = functools.partial(arch_util.ResidualBlock_noBN, nf=nf)
 
         #### extract features (for each frame)
@@ -834,6 +829,9 @@ class UPControlEDVR(nn.Module):
         self.fea_L3_conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
 
         self.control_conv = Scale2Weight(kernel_size=3, inC=nf, outC=nf)
+        if self.multi_scale_cont:
+            self.control_conv2 = Scale2Weight(kernel_size=3, inC=nf, outC=nf)
+            self.control_conv3 = Scale2Weight(kernel_size=3, inC=64, outC=64)
 
         if self.ret_valid:
             self.pcd_align = PCD_Align_Valid(nf=nf, groups=groups)
@@ -855,6 +853,9 @@ class UPControlEDVR(nn.Module):
             self.upconv1 = nn.Conv2d(nf, nf * 4, 3, 1, 1, bias=True)
             self.upconv2 = nn.Conv2d(nf, 64 * 4, 3, 1, 1, bias=True)
             self.pixel_shuffle = nn.PixelShuffle(2)
+            if self.multi_scale_cont:
+                self.cont_conv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+                self.cont_conv3 = nn.Conv2d(64, 64, 3, 1, 1, bias=True)
         else:
             self.upconv1 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
             self.upconv2 = nn.Conv2d(nf, 64, 3, 1, 1, bias=True)
@@ -929,7 +930,14 @@ class UPControlEDVR(nn.Module):
         out = self.recon_trunk(out)
         if self.down_scale:
             out = self.lrelu(self.pixel_shuffle(self.upconv1(out)))
-            out = self.lrelu(self.pixel_shuffle(self.upconv2(out)))
+            if self.multi_scale_cont:
+                out = self.control_conv2(out, scale)
+                out = self.lrelu(self.cont_conv2(out))
+                out = self.lrelu(self.pixel_shuffle(self.upconv2(out)))
+                out = self.control_conv3(out, scale)
+                out = self.lrelu(self.cont_conv3(out))
+            else:
+                out = self.lrelu(self.pixel_shuffle(self.upconv2(out)))
         else:
             out = self.lrelu(self.upconv1(out))
             out = self.lrelu(self.upconv2(out))
