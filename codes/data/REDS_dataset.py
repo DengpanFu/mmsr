@@ -12,6 +12,7 @@ from PIL import Image
 import lmdb
 import torch
 import torch.utils.data as data
+import torch.nn.functional as F
 import data.util as util
 try:
     import mc  # import memcached
@@ -397,7 +398,6 @@ class REDSMultiImgDataset(data.Dataset):
     def __len__(self):
         return len(self.paths_GT)
 
-
 class MultiREDSDataset(REDSDataset):
     def __init__(self, opt):
         super(MultiREDSDataset, self).__init__(opt=opt)
@@ -462,7 +462,10 @@ class UPREDSDataset(data.Dataset):
         self.half_N_frames = opt['N_frames'] // 2
         self.GT_root = opt['dataroot_GT']
         self.data_type = self.opt['data_type']
-        
+        # if load the previous GT image
+        self.pre_GT = self.opt['pre_GT']
+        if self.pre_GT is None or not (0 < self.pre_GT < 1):
+            self.pre_GT = 1
         #### Load image keys
         if self.data_type == 'lmdb':
             self.paths_GT, self.GT_size_tuple = util.get_image_paths(
@@ -486,27 +489,6 @@ class UPREDSDataset(data.Dataset):
         assert(len(self.scales) >= 1)
         self.GT_size = self.opt['GT_size']
         self.LQ_sizes = self.opt['LQ_size']
-        # self.scales, self.LQ_sizes = self.refine_scales()
-        # opt['scale'] = self.scales
-
-    def refine_scales(self):
-        # def convert_scales(scales, out_size=256):
-        fx = lambda x: float("{:.3f}".format(x))
-        step = fx(1 / self.GT_size)
-        new_scales, sample_sizes = [], []
-        for scale in self.scales:
-            sample_size = int(np.round(self.GT_size / scale))
-            tmp_scale = fx(self.GT_size / sample_size)
-            tmp_size = int(sample_size * tmp_scale)
-            while tmp_size > self.GT_size:
-                tmp_scale = fx(tmp_scale - step)
-                tmp_size = int(sample_size * tmp_scale)
-            while tmp_size < self.GT_size:
-                tmp_scale = fx(tmp_scale + step)
-                tmp_size = int(sample_size * tmp_scale)
-            new_scales.append(tmp_scale)
-            sample_sizes.append(sample_size)
-        return new_scales, sample_sizes
 
     def _init_lmdb(self):
         # https://github.com/chainer/chainermn/issues/129
@@ -564,7 +546,6 @@ class UPREDSDataset(data.Dataset):
         # img_LQs = [np.array(Image.fromarray(img).resize((LQ_size, LQ_size), 
         #                 Image.BICUBIC)) for img in imgs]
         return np.stack(imgs)
-
 
     def get_neighbor_list(self, center_frame_idx):
         #### determine the neighbor frames
@@ -629,25 +610,32 @@ class UPREDSDataset(data.Dataset):
             rnd_w = random.randint(0, max(0, W - self.GT_size))
             imgs = imgs[:, rnd_h : rnd_h + self.GT_size, rnd_w : rnd_w + self.GT_size, :]
             img_GT = imgs[self.half_N_frames] / 255.
+            is_PreGT = True if random.random() < self.pre_GT else False
+            img_PreGT = imgs[self.half_N_frames - 1] / 255.
             img_LQs = [np.array(Image.fromarray(img).resize((LQ_size, LQ_size), 
                         Image.BICUBIC)) / 255. for img in imgs]
             # augmentation - flip, rotate
-            img_LQs.append(img_GT)
+            img_LQs.extend([img_GT, img_PreGT])
             rlt = util.augment(img_LQs, self.opt['use_flip'], self.opt['use_rot'])
-            img_LQs = rlt[0:-1]
-            img_GT = rlt[-1]
+            img_LQs = rlt[0:-2]
+            img_GT = rlt[-2]
+            img_PreGT=rlt[-1]
 
         # stack LQ images to NHWC, N is the frame number
         img_LQs = np.stack(img_LQs, axis=0)
         # BGR => RGB
         img_GT = img_GT[:, :, [2, 1, 0]]
+        img_PreGT = img_PreGT[:, :, [2, 1, 0]]
         img_LQs = img_LQs[:, :, :, [2, 1, 0]]
         # NHWC => NCHW
         img_GT = torch.from_numpy(np.ascontiguousarray(
                             np.transpose(img_GT, (2, 0, 1)))).float()
+        img_PreGT = torch.from_numpy(np.ascontiguousarray(
+                            np.transpose(img_PreGT, (2, 0, 1)))).float()
         img_LQs = torch.from_numpy(np.ascontiguousarray(
                             np.transpose(img_LQs, (0, 3, 1, 2)))).float()
-        return {'LQs': img_LQs, 'GT': img_GT, 'key': key, 'scale': scale}
+        return {'LQs': img_LQs, 'GT': img_GT, 'Pre': img_PreGT, 
+                'if_pre': is_PreGT, 'key': key, 'scale': scale}
 
     def __len__(self):
         return len(self.paths_GT)

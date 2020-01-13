@@ -20,6 +20,23 @@ class CharbonnierLoss(nn.Module):
             raise TypeError('Unknown reduction type')
         return loss
 
+class MaskedCharbonnierLoss(nn.Module):
+    """ Masked Charbonnier Loss (L1) """
+    def __init__(self, eps=1e-6, reduction='sum'):
+        super(MaskedCharbonnierLoss, self).__init__()
+        self.eps = eps
+        self.reduction = reduction
+
+    def forward(self, x, y, mask):
+        diff = (x - y) ** 2
+        loss = torch.sum(torch.sqrt(diff * mask + self.eps))
+        if self.reduction == 'sum':
+            return loss
+        elif self.reduction == 'mean':
+            loss /= mask.sum()
+            return loss
+        else:
+            raise TypeError('Unknown reduction type')
 
 # Define GAN loss: [vanilla | lsgan | wgan-gp]
 class GANLoss(nn.Module):

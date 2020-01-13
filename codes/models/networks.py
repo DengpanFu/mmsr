@@ -3,7 +3,7 @@ import models.archs.SRResNet_arch as SRResNet_arch
 import models.archs.discriminator_vgg_arch as SRGAN_arch
 import models.archs.RRDBNet_arch as RRDBNet_arch
 import models.archs.EDVR_arch as EDVR_arch
-
+import models.archs.Flow_arch as Flow_arch
 
 # Generator
 def define_G(opt):
@@ -45,6 +45,14 @@ def define_G(opt):
                                        align_target=opt_net['align_target'], 
                                        ret_valid=opt_net['ret_valid'], 
                                        multi_scale_cont=opt_net['multi_scale_cont'])
+    elif which_model == 'FlowUPContEDVR':
+        netG = EDVR_arch.FlowUPControlEDVR(nf=opt_net['nf'], nframes=opt_net['nframes'],
+                                           groups=opt_net['groups'], front_RBs=opt_net['front_RBs'],
+                                           back_RBs=opt_net['back_RBs'], center=opt_net['center'],
+                                           w_TSA=opt_net['w_TSA'], down_scale=opt_net['down_scale'], 
+                                           align_target=opt_net['align_target'], 
+                                           ret_valid=opt_net['ret_valid'], 
+                                           multi_scale_cont=opt_net['multi_scale_cont'])
     # video SR for multiple target frames
     elif which_model == 'MultiEDVR':
         netG = EDVR_arch.MultiEDVR(nf=opt_net['nf'], nframes=opt_net['nframes'],
@@ -89,7 +97,7 @@ def define_D(opt):
 
 
 # Define network used for perceptual loss
-def define_F(opt, use_bn=False):
+def define_P(opt, use_bn=False):
     gpu_ids = opt['gpu_ids']
     device = torch.device('cuda' if gpu_ids else 'cpu')
     # PyTorch pretrained VGG19-54, before ReLU.
@@ -100,4 +108,10 @@ def define_F(opt, use_bn=False):
     netF = SRGAN_arch.VGGFeatureExtractor(feature_layer=feature_layer, use_bn=use_bn,
                                           use_input_norm=True, device=device)
     netF.eval()  # No need to train
+    return netF
+
+# Define network for Optical Flow
+def define_F(opt):
+    netF = Flow_arch.PWCNet()
+    netF.eval()
     return netF

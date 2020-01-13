@@ -1,13 +1,18 @@
 import logging
 from collections import OrderedDict
+import numpy as np
+import matplotlib.pyplot as plt
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.parallel import DataParallel, DistributedDataParallel
 import models.networks as networks
 import models.lr_scheduler as lr_scheduler
 from .base_model import BaseModel
-from models.loss import CharbonnierLoss
+from models.loss import CharbonnierLoss, MaskedCharbonnierLoss
+# from models.archs.Flow_arch import Flow_arch
+import models.archs.Flow_arch as Flow_arch
 
 logger = logging.getLogger('base')
 
@@ -44,11 +49,13 @@ class VideoBaseModel(BaseModel):
         self.load()
 
     def get_network(self, opt, mode='G'):
-        assert(mode in ['G', 'D'])
+        assert(mode in ['G', 'D', 'F'])
         if mode == 'G':
             net = networks.define_G(opt).to(self.device)
-        else:
+        elif mode == 'D':
             net = networks.define_D(opt).to(self.device)
+        elif mode == 'F':
+            net = networks.define_F(opt).to(self.device)
         if opt['dist']:
             net = DistributedDataParallel(net, 
                         device_ids=[torch.cuda.current_device()], 
@@ -287,6 +294,120 @@ class UPVideoModel(VideoBaseModel):
                 if self.ret_valid:
                     self.fake_H = self.fake_H[0]
         self.netG.train()
+
+class UPFlowVideoModel(UPVideoModel):
+    def __init__(self, opt):
+        super(UPFlowVideoModel, self).__init__(opt)
+        self.netF = self.get_network(opt, 'F')
+        self.nframe = self.opt['datasets']['train']['N_frames']
+        self.half_nframe = self.nframe // 2
+        self.l_flo_w = self.opt['train']['flow_weight']
+        self.cri_flo = MaskedCharbonnierLoss(reduction=self.opt['train']['reduction'])
+        self.load_F()
+
+    def feed_data(self, data, need_GT=True):
+        self.var_L = data['LQs'].to(self.device)
+        # self.keys = data['key']
+        scale = data.get('scale', None)
+        if isinstance(scale, (float, int)) or scale is None:
+            self.scale = scale
+        else:
+            self.scale = data['scale'][0].item()
+        if need_GT:
+            self.real_H = data['GT'].to(self.device)
+        self.pre_H = data.get('Pre', None)
+        self.if_pre = data.get('if_pre', (True, ))
+
+        # first = torch.cat([self.pre_H, self.real_H])
+        # second = torch.cat([self.real_H, self.pre_H])
+        # flows = Flow_arch.estimate_flow(self.netF, first, second)
+        # f_flow, b_flow = flows.chunk(2)
+        # # f_flow = Flow_arch.estimate_flow(self.netF, self.pre_H, self.real_H)
+        # # b_flow = Flow_arch.estimate_flow(self.netF, self.real_H, self.pre_H)
+        # # wrap, mask = Flow_arch.wraping(self.pre_H, b_flow)
+        # self.wrap_H, _ = Flow_arch.wraping(self.pre_H, b_flow)
+        # self.valid_area = Flow_arch.detect_occlusion(f_flow, b_flow)
+        # # plt.figure(0)
+        # # plt.subplot(331); 
+        # # plt.imshow((self.pre_H[0].cpu().numpy().transpose((1,2,0))*255).astype(np.uint8))
+        # # plt.subplot(332); 
+        # # plt.imshow((self.real_H[0].cpu().numpy().transpose((1,2,0))*255).astype(np.uint8))
+        # # plt.subplot(333); 
+        # # plt.imshow(f_flow[0][0].cpu().numpy())
+        # # plt.subplot(334); 
+        # # plt.imshow(b_flow[0][0].cpu().numpy())
+        # # plt.subplot(335); 
+        # # plt.imshow((self.wrap_H[0].cpu().numpy().transpose((1,2,0))*255).astype(np.uint8))
+        # # plt.subplot(336); 
+        # # plt.imshow((mask[0].cpu().numpy().transpose((1,2,0))*255).astype(np.uint8))
+        # # plt.subplot(337); 
+        # # plt.imshow((self.valid_area[0][0].cpu().numpy()*255).astype(np.uint8))
+        # # plt.show()
+
+
+    def optimize_parameters(self, step):
+        self.optimizer_G.zero_grad()
+
+        if not all(self.if_pre) or self.pre_H is None:
+            self.pre_H = F.interpolate(self.var_L[:, self.half_nframe, :, :, :], 
+                            scale_factor=self.scale, mode='bilinear', align_corners=False)
+        else:
+            self.pre_H = self.pre_H.to(self.device)
+
+        first = torch.cat([self.pre_H, self.real_H])
+        second = torch.cat([self.real_H, self.pre_H])
+        flows = Flow_arch.estimate_flow(self.netF, first, second)
+        f_flow, b_flow = flows.chunk(2)
+        self.wrap_H, _ = Flow_arch.wraping(self.pre_H, b_flow)
+        self.valid_area = Flow_arch.detect_occlusion(f_flow, b_flow)
+
+        if self.ret_valid:
+            self.fake_H, valid = self.netG(self.var_L, self.wrap_H, self.scale)
+            if not valid:
+                self.invalid_cnt += 1
+                self.log_dict['l_pix'] = None
+                self.log_dict['inval_cnt'] = self.invalid_cnt
+                return None
+        else:
+            self.fake_H = self.netG(self.var_L, self.wrap_H, self.scale)
+
+        l_pix = self.l_pix_w * self.cri_pix(self.fake_H, self.real_H)
+        l_flo = self.l_flo_w * self.cri_flo(self.fake_H, self.wrap_H, self.valid_area)
+        loss = l_pix + l_flo
+        loss.backward()
+        self.optimizer_G.step()
+
+        # set log
+        self.log_dict['l_pix'] = l_pix.item()
+        self.log_dict['l_flo'] = l_flo.item()
+        self.log_dict['loss'] = loss.item()
+        self.log_dict['inval_cnt'] = self.invalid_cnt
+
+    def test(self):
+        self.netG.eval()
+        upX = F.interpolate(self.var_L[:, self.half_nframe, :, :, :], 
+                            scale_factor=self.scale, mode='bilinear', align_corners=False)
+        if self.pre_H is None:
+            self.wrap_H = upX
+        else:
+            first = F.interpolate(self.var_L[:, self.half_nframe - 1, :, :, :], 
+                            scale_factor=self.scale, mode='bilinear', align_corners=False)
+            second = upX
+            b_flow = Flow_arch.estimate_flow(self.netF, second, first)
+            self.pre_H = self.pre_H.unsqueeze(0).to(self.device)
+            self.wrap_H, _ = Flow_arch.wraping(self.pre_H, b_flow)
+
+        with torch.no_grad():
+            self.fake_H = self.netG(self.var_L, self.wrap_H, self.scale)
+            if self.ret_valid:
+                self.fake_H = self.fake_H[0]
+        self.netG.train()
+
+    def load_F(self):
+        load_path_F = self.opt['path']['pretrain_model_F']
+        if load_path_F is not None:
+            logger.info('Loading model for F [{:s}] ...'.format(load_path_F))
+            self.load_network(load_path_F, self.netF, True)
 
 class MetaVideoModel(VideoBaseModel):
     def __init__(self, opt):

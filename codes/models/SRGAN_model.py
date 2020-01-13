@@ -67,7 +67,7 @@ class SRGANModel(BaseModel):
                 logger.info('Remove feature loss.')
                 self.cri_fea = None
             if self.cri_fea:  # load VGG perceptual loss
-                self.netF = networks.define_F(opt, use_bn=False).to(self.device)
+                self.netF = networks.define_P(opt, use_bn=False).to(self.device)
                 if opt['dist']:
                     pass  # do not need to use DistributedDataParallel for netF
                 else:
