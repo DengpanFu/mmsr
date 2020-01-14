@@ -348,18 +348,21 @@ class UPFlowVideoModel(UPVideoModel):
     def optimize_parameters(self, step):
         self.optimizer_G.zero_grad()
 
-        if not all(self.if_pre) or self.pre_H is None:
-            self.pre_H = F.interpolate(self.var_L[:, self.half_nframe, :, :, :], 
+        upX = F.interpolate(self.var_L[:, self.half_nframe, :, :, :], 
                             scale_factor=self.scale, mode='bilinear', align_corners=False)
+        if not all(self.if_pre) or self.pre_H is None:
+            self.wrap_H = upX
+            self.valid_area = None
         else:
             self.pre_H = self.pre_H.to(self.device)
-
-        first = torch.cat([self.pre_H, self.real_H])
-        second = torch.cat([self.real_H, self.pre_H])
-        flows = Flow_arch.estimate_flow(self.netF, first, second)
-        f_flow, b_flow = flows.chunk(2)
-        self.wrap_H, _ = Flow_arch.wraping(self.pre_H, b_flow)
-        self.valid_area = Flow_arch.detect_occlusion(f_flow, b_flow)
+            upX1 = F.interpolate(self.var_L[:, self.half_nframe - 1, :, :, :], 
+                            scale_factor=self.scale, mode='bilinear', align_corners=False)
+            first = torch.cat([self.pre_H, self.real_H, upX])
+            second = torch.cat([self.real_H, self.pre_H, upX1])
+            flows = Flow_arch.estimate_flow(self.netF, first, second)
+            f_flow, b_flow, t_flow = flows.chunk(3)
+            self.wrap_H, _ = Flow_arch.wraping(self.pre_H, t_flow)
+            self.valid_area = Flow_arch.detect_occlusion(f_flow, b_flow)
 
         if self.ret_valid:
             self.fake_H, valid = self.netG(self.var_L, self.wrap_H, self.scale)
@@ -372,14 +375,17 @@ class UPFlowVideoModel(UPVideoModel):
             self.fake_H = self.netG(self.var_L, self.wrap_H, self.scale)
 
         l_pix = self.l_pix_w * self.cri_pix(self.fake_H, self.real_H)
-        l_flo = self.l_flo_w * self.cri_flo(self.fake_H, self.wrap_H, self.valid_area)
-        loss = l_pix + l_flo
+        if self.valid_area is not None:
+            l_flo = self.l_flo_w * self.cri_flo(self.fake_H, 
+                        self.wrap_H, self.valid_area)
+            loss = l_pix + l_flo
+            self.log_dict['l_flo'] = l_flo.item()
+        else:
+            loss = l_pix
         loss.backward()
         self.optimizer_G.step()
-
         # set log
         self.log_dict['l_pix'] = l_pix.item()
-        self.log_dict['l_flo'] = l_flo.item()
         self.log_dict['loss'] = loss.item()
         self.log_dict['inval_cnt'] = self.invalid_cnt
 

@@ -129,16 +129,16 @@ def parse(opt_path, opt_list=None, is_train=True):
         set_default_opt(opt['train'], 'restart_weights_D', [1, 1, 1])
         set_default_opt(opt['train'], 'eta_min_G', 1e-7)
         set_default_opt(opt['train'], 'eta_min_D', 1e-7)
+        set_default_opt(opt['train'], 'gan_type', 'lsgan')
+        set_default_opt(opt['train'], 'gan_weight', 1.0)
 
         # lr_scheme_G: CosineAnnealingLR_Restart
         # T_period_G: [150000, 150000, 150000, 150000]
         # restarts_G: [150000, 300000, 450000]
-
-        set_default_opt(opt['train'], 'pixel_criterion', 'cb')
-        set_default_opt(opt['train'], 'pixel_weight', 1.0)
-        set_default_opt(opt['train'], 'gan_type', 'lsgan')
-        set_default_opt(opt['train'], 'gan_weight', 1.0)
-        set_default_opt(opt['train'], 'val_freq', 5e3)
+    set_default_opt(opt['train'], 'pixel_criterion', 'cb')
+    set_default_opt(opt['train'], 'pixel_weight', 1.0)
+    set_default_opt(opt['train'], 'val_freq', 5e3)
+    set_default_opt(opt['train'], 'flow_weight', 0.3)
 
     if opt_list is not None:
         opt_from_list(opt, opt_list)
