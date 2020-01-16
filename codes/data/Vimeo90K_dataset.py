@@ -2,12 +2,14 @@
 Vimeo90K dataset
 support reading images from lmdb, image folder and memcached
 '''
+import os
 import os.path as osp
 import random
 import pickle
 import logging
 import numpy as np
 import cv2
+from PIL import Image
 import lmdb
 import torch
 import torch.utils.data as data
@@ -16,6 +18,8 @@ try:
     import mc  # import memcached
 except ImportError:
     pass
+import matplotlib.pyplot as plt
+
 logger = logging.getLogger('base')
 
 
@@ -162,6 +166,121 @@ class Vimeo90KDataset(data.Dataset):
         img_LQs = torch.from_numpy(np.ascontiguousarray(np.transpose(img_LQs,
                                                                      (0, 3, 1, 2)))).float()
         return {'LQs': img_LQs, 'GT': img_GT, 'key': key}
+
+    def __len__(self):
+        return len(self.paths_GT)
+
+class UPVimeoDataset(data.Dataset):
+    '''
+    Reading the training Vimeo90K dataset
+    key example: 00001_0001 (_1, ..., _7)
+    GT (Ground-Truth): 4th frame;
+    LQ (Low-Quality): support reading N LQ frames, N = 1, 3, 5, 7 centered with 4th frame
+    '''
+
+    def __init__(self, opt):
+        super(UPVimeoDataset, self).__init__()
+        self.opt = opt
+        # temporal augmentation
+        self.interval_list = opt['interval_list']
+        self.random_reverse = opt['random_reverse']
+        logger.info('Temporal augmentation interval list: [{}], with random reverse is {}.'
+            .format(','.join(str(x) for x in opt['interval_list']), self.random_reverse))
+
+        self.GT_root = opt['dataroot_GT']
+        self.data_type = self.opt['data_type']
+        self.half_N_frames = opt['N_frames'] // 2
+
+        #### determine the LQ frame list
+        '''
+        N | frames
+        1 | 4
+        3 | 3,4,5
+        5 | 2,3,4,5,6
+        7 | 1,2,3,4,5,6,7
+        '''
+        self.LQ_frames_list = []
+        for i in range(opt['N_frames']):
+            self.LQ_frames_list.append(i + (9 - opt['N_frames']) // 2)
+
+        #### directly load image keys
+        if self.data_type == 'lmdb':
+            self.paths_GT, self.GT_size_tuple = util.get_image_paths(
+                                    self.data_type, self.GT_root)
+            logger.info('Using lmdb meta info for cache keys.')
+            self.paths_GT = self.paths_GT[3::7]
+        else:
+            txt_file = osp.join(self.GT_root, 'sep_trainlist.txt')
+            with open(txt_file, 'r') as f:
+                lines = f.readlines()
+                lines = [line.strip() for line in lines]
+            self.paths_GT = []
+            for line in lines:
+                gt_path = osp.join(self.GT_root, 'sequences', line, 'im4.png')
+                self.paths_GT.append(gt_path)
+        assert self.paths_GT, 'Error: GT path is empty.'
+
+        if self.data_type == 'lmdb':
+            self.GT_env = None
+
+        self.scales = self.opt['scale']
+        assert(len(self.scales) >= 1)
+        self.GT_size = self.opt['GT_size']
+        self.LQ_sizes = self.opt['LQ_size']
+
+    def _init_lmdb(self):
+        # https://github.com/chainer/chainermn/issues/129
+        self.GT_env = lmdb.open(self.GT_root, readonly=True, lock=False, 
+                                readahead=False, meminit=False)
+
+    def read_imgs(self, key):
+        imgs = []
+        if self.data_type == 'lmdb':
+            for idx in self.LQ_frames_list:
+                path = key[:-1] + str(idx)
+                imgs.append(util.read_img(self.GT_env, path, 
+                                    self.GT_size_tuple, dtype='uint8'))
+        else:
+            for idx in self.LQ_frames_list:
+                path = key[:-5] + str(idx) + key[-4:]
+                imgs.append(util.read_img(None, path, dtype='uint8'))
+        return np.stack(imgs)
+
+    def __getitem__(self, index):
+        if self.data_type == 'lmdb' and self.GT_env is None:
+            self._init_lmdb()
+
+        image_index, scale_index = index
+        scale = self.scales[scale_index]
+        LQ_size = self.LQ_sizes[scale_index]
+        key = self.paths_GT[image_index]
+
+        imgs = self.read_imgs(key)
+
+        if self.opt['phase'] == 'train':
+            _, H, W, _ = imgs.shape
+            rnd_h = random.randint(0, max(0, H - self.GT_size))
+            rnd_w = random.randint(0, max(0, W - self.GT_size))
+            imgs = imgs[:, rnd_h : rnd_h + self.GT_size, rnd_w : rnd_w + self.GT_size, :]
+            img_GT = imgs[self.half_N_frames] / 255.
+            img_LQs = [np.array(Image.fromarray(img).resize((LQ_size, LQ_size), 
+                            Image.BICUBIC)) / 255. for img in imgs]
+            img_LQs.append(img_GT)
+            rlt = util.augment(img_LQs, self.opt['use_flip'], self.opt['use_rot'])
+            img_LQs = rlt[0:-1]
+            img_GT = rlt[-1]
+
+        # stack LQ images to NHWC, N is the frame number
+        img_LQs = np.stack(img_LQs, axis=0)
+        # BGR => RGB, HWC to CHW, numpy to tensor
+        img_GT = img_GT[:, :, [2, 1, 0]]
+        img_LQs = img_LQs[:, :, :, [2, 1, 0]]
+         # NHWC => NCHW
+        img_GT = torch.from_numpy(np.ascontiguousarray(
+                            np.transpose(img_GT, (2, 0, 1)))).float()
+        img_LQs = torch.from_numpy(np.ascontiguousarray(
+                            np.transpose(img_LQs, (0, 3, 1, 2)))).float()
+        return {'LQs': img_LQs, 'GT': img_GT, 'key': key, 'scale': scale}
 
     def __len__(self):
         return len(self.paths_GT)

@@ -407,6 +407,115 @@ def REDS(img_folder, lmdb_save_path, H_dst, W_dst, scale, read_all_imgs=False):
     pickle.dump(meta_info, open(osp.join(lmdb_save_path, 'meta_info.pkl'), "wb"))
     print('Finish creating lmdb meta info.')
 
+def vimeo(img_root, lmdb_save_path):
+    """Create lmdb for the vimeo dataset, each image with a fixed size
+    GT: [3, 256, 448],     key: 00001_0001_4
+    """
+    #### configurations
+    BATCH = 50000
+    n_thread = 40
+    ########################################################
+    if not lmdb_save_path.endswith('.lmdb'):
+        raise ValueError("lmdb_save_path must end with \'lmdb\'.")
+    if osp.exists(lmdb_save_path):
+        print('Folder [{:s}] already exists. Exit...'.format(lmdb_save_path))
+        sys.exit(1)
+
+    #### read all the image paths to a list
+    print('Reading image path list ...')
+    txt_file = osp.join(img_root, 'sep_trainlist.txt')
+    with open(txt_file, 'r') as f:
+        lines = f.readlines()
+        img_list = [line.strip() for line in lines]
+
+    imgs, keys = [], []
+    for item in img_list:
+        key_pre = item.replace('/', '_')
+        im_dir = osp.join(img_root, 'sequences', item)
+        names = sorted(os.listdir(im_dir))
+        for name in names:
+            imgs.append(osp.join(im_dir, name))
+            keys.append(key_pre + '_' + name[2])
+    im1 = cv2.imread(imgs[0], cv2.IMREAD_UNCHANGED)
+    H, W, C = im1.shape
+    print('data size per image is: ', im1.nbytes)
+    data_size = im1.nbytes * len(imgs)
+    env = lmdb.open(lmdb_save_path, map_size=data_size * 10)
+
+    #### write data to lmdb
+    txn = env.begin(write=True)
+    for i in range(0, len(imgs), BATCH):
+        batch_imgs = imgs[i : i + BATCH]
+        batch_keys = keys[i : i + BATCH]
+        batch_data = read_imgs_multi_thread(batch_imgs, batch_keys, n_thread)
+        pbar = util.ProgressBar(len(batch_imgs))
+        for k, v in batch_data.items():
+            pbar.update('Write {}'.format(k))
+            key_byte = k.encode('ascii')
+            txn.put(key_byte, v)
+        txn.commit()
+        txn = env.begin(write=True)
+    txn.commit()
+    env.close()
+    print('Finish writing lmdb.')
+
+    #### create meta information
+    meta_info = {}
+    meta_info['name'] = 'vimeo_train'
+    meta_info['resolution'] = '{}_{}_{}'.format(C, H, W)
+    meta_info['keys'] = keys
+    pickle.dump(meta_info, open(osp.join(lmdb_save_path, 'meta_info.pkl'), "wb"))
+    print('Finish creating lmdb meta info.')
+
+def vimeo_test(img_root, lmdb_save_path):
+    gt_root = osp.join(img_root, 'target')
+    lq_root = osp.join(img_root, 'low_resolution')
+    txt_file = osp.join(img_root, 'sep_testlist.txt')
+    with open(txt_file, 'r') as f:
+        lines = f.readlines()
+        img_list = [line.strip() for line in lines]
+    imgs, keys = [], []
+    for item in img_list:
+        gt_key = 'gt_' + item.replace('/', '_') + '_4'
+        lq_key_pre = 'lq_' + item.replace('/', '_')
+        gt_img = osp.join(gt_root, item, 'im4.png')
+        imgs.append(gt_img)
+        keys.append(gt_key)
+        lq_im_dir = osp.join(lq_root, item)
+        lq_names = sorted(os.listdir(lq_im_dir))
+        for name in lq_names:
+            imgs.append(osp.join(lq_im_dir, name))
+            keys.append(lq_key_pre + '_' + name[2])
+
+    im1 = cv2.imread(imgs[0], cv2.IMREAD_UNCHANGED)
+    H, W, C = im1.shape
+    im2 = cv2.imread(imgs[1], cv2.IMREAD_UNCHANGED)
+    lH, lW, lC = im2.shape
+    print('data size per image is: ', im1.nbytes)
+    data_size = im1.nbytes * len(imgs)
+    env = lmdb.open(lmdb_save_path, map_size=data_size * 10)
+
+    #### write data to lmdb
+    txn = env.begin(write=True)
+    img_data = read_imgs_multi_thread(imgs, keys, 40)
+    pbar = util.ProgressBar(len(imgs))
+    for k, v in img_data.items():
+        pbar.update('Write {}'.format(k))
+        key_byte = k.encode('ascii')
+        txn.put(key_byte, v)
+    txn.commit()
+    env.close()
+    print('Finish writing lmdb.')
+
+    #### create meta information
+    meta_info = {}
+    meta_info['name'] = 'vimeo_test'
+    meta_info['gt_resolution'] = '{}_{}_{}'.format(C, H, W)
+    meta_info['lq_resolution'] = '{}_{}_{}'.format(lC, lH, lW)
+    meta_info['keys'] = keys
+    pickle.dump(meta_info, open(osp.join(lmdb_save_path, 'meta_info.pkl'), "wb"))
+    print('Finish creating lmdb meta info.')
+
 
 def read_imgs_multi_thread(imgs, keys, n_thread=40):
     #### read all images to memory (multiprocessing)
@@ -427,7 +536,6 @@ def read_imgs_multi_thread(imgs, keys, n_thread=40):
     pool.join()
     print('Finish reading {} images.'.format(len(imgs)))
     return dataset
-
 
 def MultiScaleREDS(img_root, lmdb_save_path, scales):
     """Create lmdb for the REDS dataset with multiple scales
@@ -509,42 +617,53 @@ def test_lmdb_multi_scale(dataroot, dataset='REDS'):
     img = img_flat.reshape(H, W, C)
     cv2.imwrite('test.png', img)
 
-def test_lmdb(dataroot, dataset='REDS'):
+def test_lmdb(dataroot, dataset='REDS', key=None):
     env = lmdb.open(dataroot, readonly=True, lock=False, readahead=False, meminit=False)
     meta_info = pickle.load(open(osp.join(dataroot, 'meta_info.pkl'), "rb"))
     print('Name: ', meta_info['name'])
-    print('Resolution: ', meta_info['resolution'])
+    if 'resolution' in meta_info:
+        print('Resolution: ', meta_info['resolution'])
+    if 'gt_resolution' in meta_info:
+        print('GT Resolution: ', meta_info['gt_resolution'])
+    if 'lq_resolution' in meta_info:
+        print('LQ Resolution: ', meta_info['lq_resolution'])
     print('# keys: ', len(meta_info['keys']))
     # read one image
-    if dataset == 'vimeo90k':
-        key = '00001_0001_4'
-    else:
-        key = '000_00000000'
+    if key is None:
+        if dataset in ['vimeo90k', 'vimeo']:
+            key = '00096_0936_4'
+        elif dataset == 'REDS':
+            key = '000_00000000'
+        else:
+            print('Dataset: {} not support yet'.format(dataset))
     print('Reading {} for test.'.format(key))
     with env.begin(write=False) as txn:
         buf = txn.get(key.encode('ascii'))
     img_flat = np.frombuffer(buf, dtype=np.uint8)
-    C, H, W = [int(s) for s in meta_info['resolution'].split('_')]
+    if 'gt' in key:
+        C, H, W = [int(s) for s in meta_info['gt_resolution'].split('_')]
+    elif 'lq' in key:
+        C, H, W = [int(s) for s in meta_info['lq_resolution'].split('_')]
+    else:
+        C, H, W = [int(s) for s in meta_info['resolution'].split('_')]
     img = img_flat.reshape(H, W, C)
     cv2.imwrite('test.png', img)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Convert images to LMDB file for different scales')
-    parser.add_argument('--src_dir', dest='src_dir', type=str,   default="../../datasets/REDS/LR_bicubic")
-    parser.add_argument('--dst_dir', dest='dst_dir', type=str,   default="../../datasets/REDS/LR_x1_x6.lmdb")
-    parser.add_argument('--dataset', dest='dataset', type=str,   default='REDS')
-    parser.add_argument('--scale',   dest='scale',   type=float, default=-1)
+    parser = argparse.ArgumentParser(description='Convert images to LMDB file')
+    parser.add_argument('--src_dir', dest='src_dir', type=str,   
+                        default="../../datasets/vimeo/vimeo_test")
+    parser.add_argument('--dst_dir', dest='dst_dir', type=str,   
+                        default="../../datasets/vimeo/vimeo_train.lmdb")
+    # parser.add_argument('--dataset', dest='dataset', type=str,   default='REDS')
     args = parser.parse_args()
     return args
 
 if __name__ == "__main__":
     cfgs = parse_args()
-    if cfgs.scale == -1:
-        cfgs.scale = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, \
-                      2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, \
-                      3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, \
-                      4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 5.0, \
-                      5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 6.0]
+    # vimeo_test(cfgs.src_dir, cfgs.dst_dir)
     # MultiScaleREDS(cfgs.src_dir, cfgs.dst_dir, cfgs.scale)
-    test_lmdb_multi_scale(cfgs.dst_dir)
+    # test_lmdb_multi_scale(cfgs.dst_dir)
+    test_lmdb(cfgs.dst_dir, 'vimeo_test', 'lq_00001_0266_4')
+    # test_lmdb(cfgs.dst_dir, 'vimeo', '00001_0001_1')

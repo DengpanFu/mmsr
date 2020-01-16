@@ -61,14 +61,19 @@ def main():
         exp_dir = opt['path']['experiments_root']
         # first time run: create dirs
         if not os.path.exists(exp_dir):
-            if rank <= 0:
-                os.makedirs(exp_dir)
-                os.makedirs(opt['path']['models'])
-                os.makedirs(opt['path']['training_state'])
-                os.makedirs(opt['path']['val_images'])
-                os.makedirs(opt['path']['tb_logger'])
             resume_state = None
+            if rank <= 0:
+                util.mkdir(exp_dir)
+                util.mkdir(opt['path']['models'])
+                util.mkdir(opt['path']['training_state'])
+                util.mkdir(opt['path']['val_images'])
+                util.mkdir(opt['path']['tb_logger'])
         else:
+            if rank <= 0:
+                util.mkdir(opt['path']['models'])
+                util.mkdir(opt['path']['training_state'])
+                util.mkdir(opt['path']['val_images'])
+                util.mkdir(opt['path']['tb_logger'])
             # detect experiment directory and get the latest state
             state_dir = opt['path']['training_state']
             state_files = [x for x in os.listdir(state_dir) if x.endswith('state')]
@@ -141,7 +146,7 @@ def main():
             train_size = int(math.ceil(len(train_set) / dataset_opt['batch_size']))
             total_iters = int(opt['train']['niter'])
             total_epochs = int(math.ceil(total_iters / train_size))
-            if dataset_opt['mode'] in ['MetaREDS', 'MetaREDSOnline', 'UPREDS']:
+            if dataset_opt['mode'] in ['MetaREDS', 'MetaREDSOnline', 'UPREDS', 'UPVimeo']:
                 train_sampler = DistMetaIterSampler(train_set, world_size, rank, 
                     dataset_opt['batch_size'], len(opt['scale']), dataset_ratio)
                 total_epochs = int(math.ceil(total_iters / (train_size * dataset_ratio)))
@@ -236,6 +241,8 @@ def main():
                     gt_img = util.tensor2img(visuals['GT'])  # uint8
                     # calculate PSNR
                     psnr_rlt[folder][idx_d] = util.calculate_psnr(rlt_img, gt_img)
+                    # print("{}-{}: {:.4f}".format(folder, idx_d, psnr_rlt[folder][idx_d]))
+                    # exit()
 
                     if rank == 0:
                         for _ in range(world_size):

@@ -318,31 +318,29 @@ class UPFlowVideoModel(UPVideoModel):
         self.pre_H = data.get('Pre', None)
         self.if_pre = data.get('if_pre', (True, ))
 
-        # first = torch.cat([self.pre_H, self.real_H])
-        # second = torch.cat([self.real_H, self.pre_H])
-        # flows = Flow_arch.estimate_flow(self.netF, first, second)
-        # f_flow, b_flow = flows.chunk(2)
-        # # f_flow = Flow_arch.estimate_flow(self.netF, self.pre_H, self.real_H)
-        # # b_flow = Flow_arch.estimate_flow(self.netF, self.real_H, self.pre_H)
-        # # wrap, mask = Flow_arch.wraping(self.pre_H, b_flow)
-        # self.wrap_H, _ = Flow_arch.wraping(self.pre_H, b_flow)
+
+        # self.pre_H = self.pre_H.to(self.device)
+        # f_flow = Flow_arch.estimate_flow(self.netF, self.pre_H, self.real_H)
+        # b_flow = Flow_arch.estimate_flow(self.netF, self.real_H, self.pre_H)
+        # self.wrap_H, mask = Flow_arch.wraping(self.pre_H, b_flow)
         # self.valid_area = Flow_arch.detect_occlusion(f_flow, b_flow)
-        # # plt.figure(0)
-        # # plt.subplot(331); 
-        # # plt.imshow((self.pre_H[0].cpu().numpy().transpose((1,2,0))*255).astype(np.uint8))
-        # # plt.subplot(332); 
-        # # plt.imshow((self.real_H[0].cpu().numpy().transpose((1,2,0))*255).astype(np.uint8))
-        # # plt.subplot(333); 
-        # # plt.imshow(f_flow[0][0].cpu().numpy())
-        # # plt.subplot(334); 
-        # # plt.imshow(b_flow[0][0].cpu().numpy())
-        # # plt.subplot(335); 
-        # # plt.imshow((self.wrap_H[0].cpu().numpy().transpose((1,2,0))*255).astype(np.uint8))
-        # # plt.subplot(336); 
-        # # plt.imshow((mask[0].cpu().numpy().transpose((1,2,0))*255).astype(np.uint8))
-        # # plt.subplot(337); 
-        # # plt.imshow((self.valid_area[0][0].cpu().numpy()*255).astype(np.uint8))
-        # # plt.show()
+        # self.valid_area = self.valid_area.repeat(1,3,1,1)
+        # plt.figure(0); idx=7
+        # plt.subplot(241); 
+        # plt.imshow((self.pre_H[idx].cpu().numpy().transpose((1,2,0))*255).astype(np.uint8))
+        # plt.subplot(242); 
+        # plt.imshow((self.real_H[idx].cpu().numpy().transpose((1,2,0))*255).astype(np.uint8))
+        # plt.subplot(243); 
+        # plt.imshow(f_flow[idx][0].cpu().numpy())
+        # plt.subplot(244); 
+        # plt.imshow(b_flow[idx][0].cpu().numpy())
+        # plt.subplot(246); 
+        # plt.imshow((self.wrap_H[idx].cpu().numpy().transpose((1,2,0))*255).astype(np.uint8))
+        # plt.subplot(247); 
+        # plt.imshow((mask[idx].cpu().numpy().transpose((1,2,0))*255).astype(np.uint8))
+        # plt.subplot(248); 
+        # plt.imshow((self.valid_area[idx].cpu().numpy().transpose((1,2,0))*255).astype(np.uint8))
+        # plt.show()
 
 
     def optimize_parameters(self, step):
