@@ -595,9 +595,9 @@ class UPREDSDataset(data.Dataset):
         key = self.paths_GT[image_index]
         name_a, name_b = key.split('_')
         center_frame_idx = int(name_b)
-        key = name_a + '_' + name_b
 
         neighbor_list, name_b = self.get_neighbor_list(center_frame_idx)
+        key = name_a + '_' + name_b
 
         #### get the images
         # img_GT = self.read_imgs_v0(self.GT_root, name_a, name_b)[0]
@@ -658,8 +658,8 @@ class MetaREDSDatasetOnline(data.Dataset):
         # temporal augmentation
         self.interval_list = opt['interval_list']
         self.random_reverse = opt['random_reverse']
-        logger.info('Temporal augmentation interval list: [{}], with random reverse is {}.'.format(
-            ','.join(str(x) for x in opt['interval_list']), self.random_reverse))
+        logger.info('Temporal augmentation interval list: [{}], with random reverse is {}.'.
+            format(','.join(str(x) for x in opt['interval_list']), self.random_reverse))
 
         self.half_N_frames = opt['N_frames'] // 2
         self.GT_root = opt['dataroot_GT']
@@ -667,7 +667,8 @@ class MetaREDSDatasetOnline(data.Dataset):
         
         #### Load image keys
         if self.data_type == 'lmdb':
-            self.paths_GT, self.GT_size_tuple = util.get_image_paths(self.data_type, self.GT_root)
+            self.paths_GT, self.GT_size_tuple = util.get_image_paths(
+                                    self.data_type, self.GT_root)
             logger.info('Using lmdb meta info for cache keys.')
             self.paths_GT = [v for v in self.paths_GT if v.split('_')[0] not in \
                             ['000', '011', '015', '020']]
@@ -682,6 +683,11 @@ class MetaREDSDatasetOnline(data.Dataset):
 
         if self.data_type == 'lmdb':
             self.GT_env = None
+
+        self.scales = self.opt['scale']
+        assert(len(self.scales) >= 1)
+        self.GT_sizes = self.opt['GT_size']
+        self.LQ_size = self.opt['LQ_size']
 
     def _init_lmdb(self):
         # https://github.com/chainer/chainermn/issues/129
@@ -726,63 +732,47 @@ class MetaREDSDatasetOnline(data.Dataset):
                 len(neighbor_list))
         return neighbor_list, name_b
 
-    def read_imgs(self, root_dir, name_a, name_b, scale=None):
-        if scale is None:
-            if self.data_type == 'lmdb':
-                paths = [name_a + '_' + name_b]
-            else:
-                paths = [osp.join(root_dir, name_a, name_b + '.png')]
-        else:
-            if not isinstance(name_b, (tuple, list)):
-                name_b = [name_b]
-            paths = []
-            for name in name_b:
+    def read_imgs(self, root_dir, name_a, name_bs):
+        assert(len(name_bs) > 1)
+        imgs = []
+        if self.data_type == 'lmdb':
+            for name in name_bs:
                 if not isinstance(name, str):
                     name = "{:08d}".format(name)
-                if self.data_type == 'lmdb':
-                    paths.append(name_a + '_' + name)
-                else:
-                    paths.append(osp.join(root_dir, name_a, name + '.png'))
-        imgs = []
-        for path in paths:
-            if self.data_type == 'lmdb':
-                if scale is None:
-                    img = util.read_img(self.GT_env, path, self.GT_size_tuple)
-                else:
-                    img = util.read_img_to_LR(self.GT_env, path, self.GT_size_tuple, scale)
-            else:
-                if scale is None:
-                    img = util.read_img(None, path)
-                else:
-                    img = util.read_img_to_LR(None, path, None, scale)
-            imgs.append(img)
-        return imgs
+                path = name_a + '_' + name
+                imgs.append(util.read_img(self.GT_env, path, self.GT_size_tuple, dtype='uint8'))
+        else:
+            for name in name_bs:
+                if not isinstance(name, str):
+                    name = "{:08d}".format(name)
+                path = osp.join(root_dir, name_a, name + '.png')
+                imgs.append(util.read_img(None, path, dtype='uint8'))
+        return np.stack(imgs)
 
     def __getitem__(self, index):
         if self.data_type == 'lmdb' and self.GT_env is None:
             self._init_lmdb()
 
         image_index, scale_index = index
-        scale = self.opt['scale'][scale_index]
-        LQ_size = self.opt['LQ_size']
+        scale = self.scales[scale_index]
+        GT_size = self.GT_sizes[scale_index]
         key = self.paths_GT[image_index]
         name_a, name_b = key.split('_')
         center_frame_idx = int(name_b)
 
         neighbor_list, name_b = self.get_neighbor_list(center_frame_idx)
+        key = name_a + '_' + name_b
 
-        #### get the images
-        img_GT = self.read_imgs(self.GT_root, name_a, name_b)[0]
-        img_LQs = self.read_imgs(self.GT_root, name_a, neighbor_list, scale)
+        imgs = self.read_imgs(self.GT_root, name_a, neighbor_list)
 
         if self.opt['phase'] == 'train':
-            H, W, _ = img_LQs[0].shape
-            rnd_h = random.randint(0, max(0, H - LQ_size))
-            rnd_w = random.randint(0, max(0, W - LQ_size))
-            img_LQs = [v[rnd_h:rnd_h + LQ_size, rnd_w:rnd_w + LQ_size, :] for v in img_LQs]
-            rnd_h_HR, rnd_w_HR = int(rnd_h * scale), int(rnd_w * scale)
-            GT_size = int(LQ_size * scale)
-            img_GT = img_GT[rnd_h_HR:rnd_h_HR + GT_size, rnd_w_HR:rnd_w_HR + GT_size, :]
+            _, H, W, _ = imgs.shape
+            rnd_h = random.randint(0, max(0, H - GT_size))
+            rnd_w = random.randint(0, max(0, W - GT_size))
+            imgs = imgs[:, rnd_h : rnd_h + GT_size, rnd_w : rnd_w + GT_size, :]
+            img_GT = imgs[self.half_N_frames] / 255.
+            img_LQs = [np.array(Image.fromarray(img).resize((self.LQ_size, 
+                        self.LQ_size), Image.BICUBIC)) / 255. for img in imgs]
             # augmentation - flip, rotate
             img_LQs.append(img_GT)
             rlt = util.augment(img_LQs, self.opt['use_flip'], self.opt['use_rot'])

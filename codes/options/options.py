@@ -20,6 +20,7 @@ def parse(opt_path, opt_list=None, is_train=True):
     set_default_opt(opt, 'auto_resume', True)
     set_default_opt(opt['train'], 'reduction', 'sum')
     set_default_opt(opt['train'], 'fix_edvr', False)
+    set_default_opt(opt['datasets']['train'], 'sample_base', 'GT')
 
     if isinstance(opt['scale'], (int, float)) and opt['scale'] < -1:
         opt['scale'] = format_float(np.arange(1.1, -opt['scale']+ 0.05, 0.1).tolist())
@@ -156,24 +157,46 @@ def format_float(input, prec=1):
         return format_str(input)
 
 def refine_scales(opt):
-    out_size = opt['datasets']['train'].get('GT_size', None)
-    if out_size is None: out_size = 256
-    step = format_float(0.5 / out_size, 3)
-    new_scales, sample_sizes = [], []
-    for scale in opt['scale']:
-        sample_size = int(np.round(out_size / scale))
-        tmp_scale = format_float(out_size / sample_size, 3)
-        tmp_size = int(sample_size * tmp_scale)
-        while tmp_size > out_size:
-            tmp_scale = format_float(tmp_scale - step, 3)
+    sample_base = opt['datasets']['train']['sample_base']
+    if sample_base == 'GT':
+        out_size = opt['datasets']['train'].get('GT_size', None)
+        if out_size is None: 
+            out_size = 256
+            opt['datasets']['train']['GT_size'] = 256
+        step = format_float(0.5 / out_size, 3)
+        new_scales, sample_sizes = [], []
+        for scale in opt['scale']:
+            sample_size = int(np.round(out_size / scale))
+            tmp_scale = format_float(out_size / sample_size, 3)
             tmp_size = int(sample_size * tmp_scale)
-        while tmp_size < out_size:
-            tmp_scale = format_float(tmp_scale + step, 3)
-            tmp_size = int(sample_size * tmp_scale)
-        new_scales.append(tmp_scale)
-        sample_sizes.append(sample_size)
-    opt['scale'] = new_scales
-    opt['datasets']['train']['LQ_size'] = sample_sizes
+            while tmp_size > out_size:
+                tmp_scale = format_float(tmp_scale - step, 3)
+                tmp_size = int(sample_size * tmp_scale)
+            while tmp_size < out_size:
+                tmp_scale = format_float(tmp_scale + step, 3)
+                tmp_size = int(sample_size * tmp_scale)
+            new_scales.append(tmp_scale)
+            sample_sizes.append(sample_size)
+        opt['scale'] = new_scales
+        opt['datasets']['train']['LQ_size'] = sample_sizes
+    else:
+        in_size = opt['datasets']['train'].get('LQ_size', None)
+        if in_size is None: 
+            in_size = 64
+            opt['datasets']['train']['LQ_size'] = 64
+        new_scales, sample_sizes = [], []
+        for scale in opt['scale']:
+            sample_size = int(np.round(scale * in_size))
+            sample_sizes.append(sample_size)
+            new_scale = sample_size / in_size
+            if format_float(new_scale, 3) < new_scale:
+                new_scale = format_float(new_scale + 0.001, 3)
+            else:
+                new_scale = format_float(new_scale, 3)
+            new_scales.append(new_scale)
+        opt['scale'] = new_scales
+        opt['datasets']['train']['GT_size'] = sample_sizes
+
 
 def opt_from_list(opt, opt_list):
     from ast import literal_eval

@@ -1,0 +1,36 @@
+name: UPEDVR_M_woTSA_Flow
+
+datasets:
+    name: REDS4
+    mode: video_test
+    gt_dir: ../datasets/REDS/REDS4/GT
+    lq_dir: ../datasets/REDS/REDS4/sharp_bicubic
+    cache_data: false
+    N_frames: 5
+    padding: new_info
+    scale: 4
+
+network_G:
+  which_model_G: FlowUPContEDVR
+  nf: 64
+  nframes: 5
+  groups: 8
+  front_RBs: 5
+  back_RBs: 10
+  center: ~
+  predeblur: false
+  HR_in: false
+  w_TSA: false
+  down_scale: true
+  align_target: true
+  ret_valid: true
+  deform_lr_mult: 1
+  multi_scale_cont: true
+
+test:
+  flip_test: false 
+  save_imgs: false
+  crop_border: 0
+
+path:
+  pretrain_model_F: /home/dengpanfu/SR/pwc/models/network-default.pytorch

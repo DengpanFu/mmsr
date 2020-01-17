@@ -436,6 +436,7 @@ class MetaVideoModel(VideoBaseModel):
                 P, M = self.input_matrix_wpn(self.LQ_size, self.LQ_size, self.all_scales)
                 self.Pos[scale] = P
                 self.Mask[scale] = M
+            self.test_pros, self.test_masks = {}, {}
 
     def get_optimizer(self, net, opt):
         wd = opt['weight_decay_G'] if opt['weight_decay_G'] else 0
@@ -487,7 +488,8 @@ class MetaVideoModel(VideoBaseModel):
             #res_scale = scale_int - scale
             #scale_mat[0,scale_int-1]=1-res_scale
             #scale_mat[0,scale_int-2]= res_scale
-            scale_mat = torch.cat([scale_mat]*(inH*inW*(scale_int**2)),0)  ###(inH*inW*scale_int**2, 4)
+            scale_mat = torch.cat([scale_mat]*(inH*inW*(scale_int**2)),0)  
+            ###(inH*inW*scale_int**2, 4)
 
         ####projection  coordinate  and caculate the offset 
         h_project_coord = torch.arange(0,outH, 1).float().mul(1.0/scale)
@@ -543,7 +545,8 @@ class MetaVideoModel(VideoBaseModel):
         if add_scale:
             pos_mat = torch.cat((scale_mat.view(1,-1,1), pos_mat),2)
 
-        return pos_mat.to(self.device), mask_mat.to(self.device)   ##outH*outW*2 outH=scale_int*inH, outW=scale_int*inW
+        return pos_mat.to(self.device), mask_mat.to(self.device)
+               # #outH*outW*2 outH=scale_int*inH, outW=scale_int*inW
 
     def feed_data(self, data, need_GT=True):
         self.var_L = data['LQs'].to(self.device)
@@ -584,7 +587,13 @@ class MetaVideoModel(VideoBaseModel):
         self.netG.eval()
         with torch.no_grad():
             N, K, C, H, W = self.var_L.size()
-            scale_coord_map, mask = self.input_matrix_wpn(H, W, self.scale)
+            if self.pre_compute_W and (H, W, self.scale) not in self.test_masks:
+                scale_coord_map, mask = self.input_matrix_wpn(H, W, self.scale)
+                self.test_pros[(H, W, self.scale)] = scale_coord_map.clone()
+                self.test_masks[(H, W, self.scale)] = mask.clone()
+            else:
+                scale_coord_map = self.test_pros[(H, W, self.scale)].clone()
+                mask = self.test_masks[(H, W, self.scale)].clone()
             if self.n_gpus > 1 and not self.opt['dist']:
                 scale_coord_map = torch.cat([scale_coord_map] * self.n_gpus, 0)
                 mask = torch.cat([mask] * self.n_gpus, 0)
