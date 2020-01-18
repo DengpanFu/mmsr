@@ -462,10 +462,6 @@ class UPREDSDataset(data.Dataset):
         self.half_N_frames = opt['N_frames'] // 2
         self.GT_root = opt['dataroot_GT']
         self.data_type = self.opt['data_type']
-        # if load the previous GT image
-        self.pre_GT = self.opt['pre_GT']
-        if self.pre_GT is None or not (0 < self.pre_GT < 1):
-            self.pre_GT = 1
         #### Load image keys
         if self.data_type == 'lmdb':
             self.paths_GT, self.GT_size_tuple = util.get_image_paths(
@@ -495,38 +491,6 @@ class UPREDSDataset(data.Dataset):
         self.GT_env = lmdb.open(self.opt['dataroot_GT'], readonly=True, lock=False, 
                         readahead=False, meminit=False)
 
-    def read_imgs_v0(self, root_dir, name_a, name_b, scale=None):
-        if scale is None:
-            if self.data_type == 'lmdb':
-                paths = [name_a + '_' + name_b]
-            else:
-                paths = [osp.join(root_dir, name_a, name_b + '.png')]
-        else:
-            if not isinstance(name_b, (tuple, list)):
-                name_b = [name_b]
-            paths = []
-            for name in name_b:
-                if not isinstance(name, str):
-                    name = "{:08d}".format(name)
-                if self.data_type == 'lmdb':
-                    paths.append(name_a + '_' + name)
-                else:
-                    paths.append(osp.join(root_dir, name_a, name + '.png'))
-        imgs = []
-        for path in paths:
-            if self.data_type == 'lmdb':
-                if scale is None:
-                    img = util.read_img(self.GT_env, path, self.GT_size_tuple)
-                else:
-                    img = util.read_img_to_LR(self.GT_env, path, self.GT_size_tuple, scale)
-            else:
-                if scale is None:
-                    img = util.read_img(None, path)
-                else:
-                    img = util.read_img_to_LR(None, path, None, scale)
-            imgs.append(img)
-        return imgs
-
     def read_imgs(self, root_dir, name_a, name_bs):
         assert(len(name_bs) > 1)
         imgs = []
@@ -542,9 +506,6 @@ class UPREDSDataset(data.Dataset):
                     name = "{:08d}".format(name)
                 path = osp.join(root_dir, name_a, name + '.png')
                 imgs.append(util.read_img(None, path, dtype='uint8'))
-        # img_GT = imgs[self.half_N_frames]
-        # img_LQs = [np.array(Image.fromarray(img).resize((LQ_size, LQ_size), 
-        #                 Image.BICUBIC)) for img in imgs]
         return np.stack(imgs)
 
     def get_neighbor_list(self, center_frame_idx):
@@ -599,9 +560,62 @@ class UPREDSDataset(data.Dataset):
         neighbor_list, name_b = self.get_neighbor_list(center_frame_idx)
         key = name_a + '_' + name_b
 
-        #### get the images
-        # img_GT = self.read_imgs_v0(self.GT_root, name_a, name_b)[0]
-        # img_LQs = self.read_imgs_v0(self.GT_root, name_a, neighbor_list, scale)
+        imgs = self.read_imgs(self.GT_root, name_a, neighbor_list)
+
+        if self.opt['phase'] == 'train':
+            _, H, W, _ = imgs.shape
+            rnd_h = random.randint(0, max(0, H - self.GT_size))
+            rnd_w = random.randint(0, max(0, W - self.GT_size))
+            imgs = imgs[:, rnd_h : rnd_h + self.GT_size, rnd_w : rnd_w + self.GT_size, :]
+            img_GT = imgs[self.half_N_frames] / 255.
+            img_LQs = [np.array(Image.fromarray(img).resize((LQ_size, LQ_size), 
+                        Image.BICUBIC)) / 255. for img in imgs]
+            # augmentation - flip, rotate
+            img_LQs.append(img_GT)
+            rlt = util.augment(img_LQs, self.opt['use_flip'], self.opt['use_rot'])
+            img_LQs = rlt[0:-1]
+            img_GT = rlt[-1]
+
+        # stack LQ images to NHWC, N is the frame number
+        img_LQs = np.stack(img_LQs, axis=0)
+        # BGR => RGB
+        img_GT = img_GT[:, :, [2, 1, 0]]
+        img_LQs = img_LQs[:, :, :, [2, 1, 0]]
+        # NHWC => NCHW
+        img_GT = torch.from_numpy(np.ascontiguousarray(
+                            np.transpose(img_GT, (2, 0, 1)))).float()
+        img_LQs = torch.from_numpy(np.ascontiguousarray(
+                            np.transpose(img_LQs, (0, 3, 1, 2)))).float()
+        return {'LQs': img_LQs, 'GT': img_GT, 'key': key, 'scale': scale}
+
+    def __len__(self):
+        return len(self.paths_GT)
+
+    def __str__(self):
+        p_str = ""
+        return p_str
+
+class FlowUPREDSDataset(UPREDSDataset):
+    def __init__(self, opt):
+        super(FlowUPREDSDataset, self).__init__(opt=opt)
+        self.pre_GT = self.opt['pre_GT']
+        if self.pre_GT is None or not (0 < self.pre_GT < 1):
+            self.pre_GT = 1
+
+    def __getitem__(self, index):
+        if self.data_type == 'lmdb' and self.GT_env is None:
+            self._init_lmdb()
+
+        image_index, scale_index = index
+        scale = self.scales[scale_index]
+        LQ_size = self.LQ_sizes[scale_index]
+        key = self.paths_GT[image_index]
+        name_a, name_b = key.split('_')
+        center_frame_idx = int(name_b)
+
+        neighbor_list, name_b = self.get_neighbor_list(center_frame_idx)
+        key = name_a + '_' + name_b
+
         imgs = self.read_imgs(self.GT_root, name_a, neighbor_list)
 
         if self.opt['phase'] == 'train':
@@ -636,13 +650,6 @@ class UPREDSDataset(data.Dataset):
                             np.transpose(img_LQs, (0, 3, 1, 2)))).float()
         return {'LQs': img_LQs, 'GT': img_GT, 'Pre': img_PreGT, 
                 'if_pre': is_PreGT, 'key': key, 'scale': scale}
-
-    def __len__(self):
-        return len(self.paths_GT)
-
-    def __str__(self):
-        p_str = ""
-        return p_str
 
 class MetaREDSDatasetOnline(data.Dataset):
     '''
