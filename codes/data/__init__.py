@@ -55,6 +55,8 @@ def create_dataset(dataset_opt):
         from data.Vimeo90K_dataset import UPVimeoDataset as D
     elif mode == 'video_test':
         from data.video_test_dataset import VideoTestDataset as D
+    elif mode == 'online_video_test':
+        from data.video_test_dataset import OnlineVideoTestDataset as D
     elif mode == 'img_test':
         from data.video_test_dataset import ImgTestDataset as D
     else:

@@ -1,8 +1,11 @@
+import os
 import os.path as osp
+import pickle
+import numpy as np
+from PIL import Image
 import torch
 import torch.utils.data as data
 import data.util as util
-
 
 class VideoTestDataset(data.Dataset):
     """
@@ -84,6 +87,101 @@ class VideoTestDataset(data.Dataset):
 
     def __len__(self):
         return len(self.data_info['path_GT'])
+
+class OnlineVideoTestDataset(data.Dataset):
+    def __init__(self, opt):
+        super(OnlineVideoTestDataset, self).__init__()
+        self.opt = opt
+        self.data_name = opt['name']
+        self.cache_data = opt['cache_data']
+        self.half_N_frames = opt['N_frames'] // 2
+        self.GT_root = opt['dataroot_GT']
+        self.is_lmdb = self.GT_root.endswith('lmdb')
+
+        self.data_info = self.data_info = {'path_GT': [], 'idx': [], 
+                                           'folder': [], 'border': []}
+
+        self.scale = opt['scale']
+        self.imgs_GT = {}
+        if self.data_name.lower() in ['vid4', 'reds4']:
+            if self.is_lmdb:
+                raise TypeError("{} data should not lmdb".format(self.data_name))
+            subs = sorted(os.listdir(self.GT_root))
+            for sub in subs:
+                sub_dir = osp.join(self.GT_root, sub)
+                im_names = sorted(os.listdir(sub_dir))
+                im_paths = [osp.join(sub_dir, name) for name in im_names]
+                max_idx = len(im_names)
+                self.data_info['path_GT'].extend(im_paths)
+                self.data_info['folder'].extend([sub] * max_idx)
+                for i in range(max_idx):
+                    self.data_info['idx'].append('{}/{}'.format(i, max_idx))
+                border_l = [0] * max_idx
+                for i in range(self.half_N_frames):
+                    border_l[i] = 1
+                    border_l[max_idx - i - 1] = 1
+                self.data_info['border'].extend(border_l)
+                if self.cache_data:
+                    self.imgs_GT[sub] = self.read_sub_images(im_paths)
+
+        elif self.data_name.lower() in ['vimeo', 'vimeo90k', 'vimeo90k-test']:
+            if self.is_lmdb:
+                paths_GT, self.GT_size_tuple = util.get_image_paths('lmdb', self.GT_root)
+                self.data_info['path_GT'] = [x for x in paths_GT if x.endswith('_4')]
+            else:
+                split_file = osp.join(self.GT_root, 'sep_trainlist.txt')
+                paths_GT = []
+                with open(txt_file, 'r') as f:
+                    lines = f.readlines()
+                    img_list = [line.strip() for line in lines]
+                for item in img_list:
+                    key = osp.join(*item.split('/'), 'im4.png')
+                    paths_GT.append(osp.join(self.GT_root, 'sequences', key))
+                self.data_info['path_GT'] = paths_GT
+        else:
+            raise ValueError(
+                'Not support video test dataset. Support Vid4, REDS4 and Vimeo90k-Test.')
+
+    def read_sub_images(self, paths):
+        if not isinstance(paths, (list, tuple)):
+            paths = [paths]
+        imgs = []
+        for path in paths:
+            imgs.append(util.read_img(None, path, dtype='uint8'))
+        return np.stack(imgs)
+
+    def get_effect_H_W(self, H, W, scale):
+        pass
+
+    def __getitem__(self, index):
+        scale = self.scale
+        if self.data_name.lower() in ['vid4', 'reds4']:
+            folder = self.data_info['folder'][index]
+            idx, max_idx = self.data_info['idx'][index].split('/')
+            idx, max_idx = int(idx), int(max_idx)
+            border = self.data_info['border'][index]
+            
+            select_idx = util.index_generation(idx, max_idx, self.opt['N_frames'],
+                                               padding=self.opt['padding'])
+            if self.cache_data:
+                imgs = self.imgs_GT[folder][select_idx]
+                N, H, W, C = imgs.shape
+
+                img_GT = imgs[self.half_N_frames] / 255.
+                imgs_LQ = [np.array(Image.fromarray(img).resize((LQ_W, LQ_H), 
+                        Image.BICUBIC)) / 255. for img in imgs]
+            else:
+                pass  # TODO
+
+            out = {'LQs': imgs_LQ, 'GT': img_GT, 'folder': folder, 'scale': scale, 
+                  'idx': self.data_info['idx'][index], 'border': border, }
+        else:
+            key = self.data_info['path_GT'][index]
+
+
+    def __len__(self):
+        return len(self.data_info['path_GT'])
+
 
 class ImgTestDataset(data.Dataset):
     """
