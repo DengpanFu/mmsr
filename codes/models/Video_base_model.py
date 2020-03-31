@@ -417,7 +417,9 @@ class MetaVideoModel(VideoBaseModel):
         super(MetaVideoModel, self).__init__(opt)
         train_opt = self.opt['train']
         self.optimizer_G = self.get_optimizer(self.netG, train_opt)
+        self.scheduler_G = self.get_lr_scheduler(self.optimizer_G, train_opt)
         self.optimizers = [self.optimizer_G]
+        self.schedulers = [self.scheduler_G]
 
         self.all_scales = self.opt['scale']
         self.LQ_size = self.opt['datasets']['train']['LQ_size']

@@ -121,3 +121,4 @@ venv.bak/
 .mypy_cache/
 codes/options/train/*.yml
 codes/models/archs/dcn3d
+snapshots

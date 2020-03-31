@@ -725,6 +725,7 @@ class UPEDVR(nn.Module):
         out = self.lrelu(self.HRconv(out))    # B,C,256,256
         out = self.conv_last(out)    # B,3,256,256
         out += x_center
+        if not self.training: return out
         if self.ret_valid:
             return out, valid
         else:
