@@ -28,7 +28,7 @@ def init_dist(backend='nccl', **kwargs):
 def main():
     #### options
     parser = argparse.ArgumentParser()
-    parser.add_argument('-opt', type=str, default='options/train/train_EDVR_woTSA_M.yml', 
+    parser.add_argument('-opt', type=str, default='options/train/Meta_EDVR_M_woTSA.yml', 
                         help='Path to option YAML file.')
     parser.add_argument('--set', dest='set_opt', default=None, nargs=argparse.REMAINDER, 
                         help='set options')
@@ -174,6 +174,7 @@ def main():
     model = create_model(opt)
 
     #### resume training
+    used_data_need_skip = False
     if resume_state:
         logger.info('Resuming training from epoch: {}, iter: {}.'.format(
             resume_state['epoch'], resume_state['iter']))
@@ -181,100 +182,110 @@ def main():
         start_epoch = resume_state['epoch']
         current_step = resume_state['iter']
         model.resume_training(resume_state)  # handle optimizers and schedulers
+        used_data_iters = current_step - start_epoch * len(train_loader)
+        if used_data_iters > 0:
+            used_data_need_skip = True
+        used_cnt = 0
     else:
         current_step = 0
         start_epoch = 0
+        used_data_iters, used_cnt = 0, 0
     #### training
     logger.info('Start training from epoch: {:d}, iter: {:d}'.format(start_epoch, current_step))
     for epoch in range(start_epoch, total_epochs + 1):
         if opt['dist']:
             train_sampler.set_epoch(epoch)
         for _, train_data in enumerate(train_loader):
-            current_step += 1
-            if current_step > total_iters:
-                break
-            #### update learning rate
-            model.update_learning_rate(current_step, warmup_iter=opt['train']['warmup_iter'])
+            if used_data_need_skip:
+                # resume training, skip some data that already explored.
+                used_cnt += 1
+                if used_cnt >= used_data_iters:
+                    used_data_need_skip = False
+            else:
+                current_step += 1
+                if current_step > total_iters:
+                    break
+                #### update learning rate
+                model.update_learning_rate(current_step, warmup_iter=opt['train']['warmup_iter'])
 
-            #### training
-            model.feed_data(train_data)
-            model.optimize_parameters(current_step)
-            #### log
-            if current_step % opt['logger']['print_freq'] == 0:
-                logs = model.get_current_log()
-                message = '[epoch:{:3d}, iter:{:8,d}, lr:('.format(epoch, current_step)
-                for v in model.get_current_learning_rate():
-                    message += '{:.3e},'.format(v)
-                message += ')] '
-                for k, v in logs.items():
-                    if v is not None:
-                        message += '{:s}: {:.4e} '.format(k, v)
-                    # tensorboard logger
-                    if opt['use_tb_logger'] and 'debug' not in opt['name']:
-                        if rank <= 0 and v is not None:
-                            tb_logger.add_scalar(k, v, current_step)
-                if rank <= 0:
-                    logger.info(message)
-                    if current_step % (total_iters // 500) == 0:
-                        print("PROGRESS: {:02d}%".format(int(current_step/total_iters*100)))
-            #### validation
-            if opt['datasets'].get('val', None) and current_step % opt['train']['val_freq'] == 0:
-                # video restoration validation
-                psnr_rlt = {}  # with border and center frames
-                if rank == 0:
-                    pbar = util.ProgressBar(len(val_set))
-                for idx in range(rank, len(val_set), world_size):
-                    val_data = val_set[idx]
-                    val_data['LQs'].unsqueeze_(0)
-                    val_data['GT'].unsqueeze_(0)
-                    folder = val_data['folder']
-                    idx_d, max_idx = val_data['idx'].split('/')
-                    idx_d, max_idx = int(idx_d), int(max_idx)
-                    if psnr_rlt.get(folder, None) is None:
-                        psnr_rlt[folder] = torch.zeros(max_idx, dtype=torch.float32,
-                                                       device='cuda')
-                    # tmp = torch.zeros(max_idx, dtype=torch.float32, device='cuda')
-                    model.feed_data(val_data)
-                    model.test()
-                    visuals = model.get_current_visuals()
-                    rlt_img = util.tensor2img(visuals['rlt'])  # uint8
-                    gt_img = util.tensor2img(visuals['GT'])  # uint8
-                    # calculate PSNR
-                    psnr_rlt[folder][idx_d] = util.calculate_psnr(rlt_img, gt_img)
-                    # print("{}-{}: {:.4f}".format(folder, idx_d, psnr_rlt[folder][idx_d]))
-                    # exit()
+                #### training
+                model.feed_data(train_data)
+                model.optimize_parameters(current_step)
+                #### log
+                if current_step % opt['logger']['print_freq'] == 0:
+                    logs = model.get_current_log()
+                    message = '[epoch:{:3d}, iter:{:8,d}, lr:('.format(epoch, current_step)
+                    for v in model.get_current_learning_rate():
+                        message += '{:.3e},'.format(v)
+                    message += ')] '
+                    for k, v in logs.items():
+                        if v is not None:
+                            message += '{:s}: {:.4e} '.format(k, v)
+                        # tensorboard logger
+                        if opt['use_tb_logger'] and 'debug' not in opt['name']:
+                            if rank <= 0 and v is not None:
+                                tb_logger.add_scalar(k, v, current_step)
+                    if rank <= 0:
+                        logger.info(message)
+                        if current_step % (total_iters // 500) == 0:
+                            print("PROGRESS: {:02d}%".format(int(current_step/total_iters*100)))
+                #### validation
+                if opt['datasets'].get('val', None) and current_step % opt['train']['val_freq'] == 0:
+                    # video restoration validation
+                    psnr_rlt = {}  # with border and center frames
+                    if rank == 0:
+                        pbar = util.ProgressBar(len(val_set))
+                    for idx in range(rank, len(val_set), world_size):
+                        val_data = val_set[idx]
+                        val_data['LQs'].unsqueeze_(0)
+                        val_data['GT'].unsqueeze_(0)
+                        folder = val_data['folder']
+                        idx_d, max_idx = val_data['idx'].split('/')
+                        idx_d, max_idx = int(idx_d), int(max_idx)
+                        if psnr_rlt.get(folder, None) is None:
+                            psnr_rlt[folder] = torch.zeros(max_idx, dtype=torch.float32,
+                                                           device='cuda')
+                        # tmp = torch.zeros(max_idx, dtype=torch.float32, device='cuda')
+                        model.feed_data(val_data)
+                        model.test()
+                        visuals = model.get_current_visuals()
+                        rlt_img = util.tensor2img(visuals['rlt'])  # uint8
+                        gt_img = util.tensor2img(visuals['GT'])  # uint8
+                        # calculate PSNR
+                        psnr_rlt[folder][idx_d] = util.calculate_psnr(rlt_img, gt_img)
+                        # print("{}-{}: {:.4f}".format(folder, idx_d, psnr_rlt[folder][idx_d]))
+                        # exit()
+
+                        if rank == 0:
+                            for _ in range(world_size):
+                                pbar.update('Test {} - {}/{}'.format(folder, idx_d, max_idx))
+                    # # collect data
+                    for _, v in psnr_rlt.items():
+                        dist.reduce(v, 0)
+                    dist.barrier()
 
                     if rank == 0:
-                        for _ in range(world_size):
-                            pbar.update('Test {} - {}/{}'.format(folder, idx_d, max_idx))
-                # # collect data
-                for _, v in psnr_rlt.items():
-                    dist.reduce(v, 0)
-                dist.barrier()
-
-                if rank == 0:
-                    psnr_rlt_avg = {}
-                    psnr_total_avg = 0.
-                    for k, v in psnr_rlt.items():
-                        psnr_rlt_avg[k] = torch.mean(v).cpu().item()
-                        psnr_total_avg += psnr_rlt_avg[k]
-                    psnr_total_avg /= len(psnr_rlt)
-                    log_s = '# Validation # PSNR: {:.3f}:'.format(psnr_total_avg)
-                    for k, v in psnr_rlt_avg.items():
-                        log_s += ' {}: {:.3f}'.format(k, v)
-                    logger.info(log_s)
-                    if opt['use_tb_logger'] and 'debug' not in opt['name']:
-                        tb_logger.add_scalar('psnr_avg', psnr_total_avg, current_step)
+                        psnr_rlt_avg = {}
+                        psnr_total_avg = 0.
+                        for k, v in psnr_rlt.items():
+                            psnr_rlt_avg[k] = torch.mean(v).cpu().item()
+                            psnr_total_avg += psnr_rlt_avg[k]
+                        psnr_total_avg /= len(psnr_rlt)
+                        log_s = '# Validation # PSNR: {:.3f}:'.format(psnr_total_avg)
                         for k, v in psnr_rlt_avg.items():
-                            tb_logger.add_scalar(k, v, current_step)
-            
+                            log_s += ' {}: {:.3f}'.format(k, v)
+                        logger.info(log_s)
+                        if opt['use_tb_logger'] and 'debug' not in opt['name']:
+                            tb_logger.add_scalar('psnr_avg', psnr_total_avg, current_step)
+                            for k, v in psnr_rlt_avg.items():
+                                tb_logger.add_scalar(k, v, current_step)
 
-            #### save models and training states
-            if current_step % opt['logger']['save_checkpoint_freq'] == 0:
-                if rank <= 0:
-                    logger.info('Saving models and training states.')
-                    model.save(current_step)
-                    model.save_training_state(epoch, current_step)
+                #### save models and training states
+                if current_step % opt['logger']['save_checkpoint_freq'] == 0:
+                    if rank <= 0:
+                        logger.info('Saving models and training states.')
+                        model.save(current_step)
+                        model.save_training_state(epoch, current_step)
 
     if rank <= 0:
         logger.info('Saving the final model.')
