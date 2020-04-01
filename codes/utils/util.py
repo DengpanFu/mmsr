@@ -218,6 +218,17 @@ def flipx4_forward(model, inp):
     return output_f / 4
 
 
+def up_single_forward(model, inp, scale):
+    with torch.no_grad():
+        model_output = model(inp, scale)
+        if isinstance(model_output, list) or isinstance(model_output, tuple):
+            output = model_output[0]
+        else:
+            output = model_output
+    output = output.data.float().cpu()
+    return output
+
+
 def input_matrix_wpn(inH, inW, scale, add_scale=True):
     '''
     inH, inW: the size of the feature maps
